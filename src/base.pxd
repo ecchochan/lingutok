@@ -1,3 +1,5 @@
+# cython: language_level=2, warn.undeclared=False, language=c++
+
 cdef extern from "<marisa/base.h>":
 
     # A dictionary consists of 3 tries in default. Usually more tries make a

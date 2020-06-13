@@ -3,6 +3,7 @@ test*
 
 MANIFEST
 src/*.html
+src/*.cpp
 docs/_build
 
 *.py[cod]
@@ -38,3 +39,8 @@ nosetests.xml
 
 # IDE
 .idea
+
+.ipynb_checkpoints
+**/.ipynb_checkpoints
+**/*Untitled*.ipynb
+**/*test*.ipynb

@@ -1,3 +1,6 @@
+# cython: language_level=2
+# distutils: language = c++
+
 cimport agent
 cimport base
 cimport keyset

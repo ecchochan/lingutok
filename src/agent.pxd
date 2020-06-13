@@ -1,3 +1,5 @@
+# cython: language_level=2
+
 cimport query, key
 
 cdef extern from "<marisa/agent.h>" namespace "marisa" nogil:

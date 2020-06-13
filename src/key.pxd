@@ -1,3 +1,5 @@
+# cython: language_level=2
+
 cdef extern from "<marisa/key.h>" namespace "marisa" nogil:
 
     cdef cppclass Key:
