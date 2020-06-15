@@ -525,20 +525,15 @@ cdef class Parts():
         self.contents = contents
         self.score = score
 '''
-cdef struct s_Part:
-    int content
-    int mode
-    int merge_mode
+
     
-ctypedef s_Part Part
-ctypedef s_Parts Parts
     
 cdef struct s_Parts:
-    vector[Part] contents
+    vector[long] contents
     float score
 
-ctypedef vector[Part] vector_Part
-ctypedef vector[Parts] vector_Parts
+ctypedef s_Parts Parts
+
 
 
 cdef float ROOT_PUNISHMENT = 0.5
@@ -643,13 +638,21 @@ cdef unordered_map[int, unordered_set[int]] true_no_suffixed_by_of_roots
 cdef unordered_map[int, unordered_set[int]] true_no_suffixed_by_of_nonroots
 
 
-cdef bint adjacent_violate(s_Part A_part, s_Part B_part):
-    cdef bint A_is_root = A_part.form == ROOT
-    
-    A = all_parts_list[A_part.content]
-    B = all_parts_list[B_part.content]
+cdef bint adjacent_violate(long A_part, long B_part):
+    cdef int A_key = A_part / 9
+    cdef int A_part_merge_mode = (A_part - A_key * 9) / 3
+    cdef int A_part_form = A_part % 3 
 
-    if A_part.merge_mode == MERGE_MODE_SINGLE and B_part.merge_mode == MERGE_MODE_SINGLE:
+    cdef int B_key = B_part / 9
+    cdef int B_part_merge_mode = (B_part - B_key * 9) / 3
+    cdef int B_part_form = B_part % 3 
+
+    cdef bint A_is_root = A_part_form == ROOT
+    
+    A = all_parts_list[A_key]
+    B = all_parts_list[B_key]
+
+    if A_part_merge_mode == MERGE_MODE_SINGLE and B_part_merge_mode == MERGE_MODE_SINGLE:
         return False
 
     if B in no_prefixed_by_of and A in no_prefixed_by_of[B]:
@@ -669,13 +672,18 @@ cdef bint adjacent_violate(s_Part A_part, s_Part B_part):
     return False
 
 
-cdef bint _adjacent_violate(Part A_part, Part B_part):
-    cdef bint A_is_root = A_part.form == ROOT
-    
-    cdef int A = A_part.content
-    cdef int B = B_part.content
+cdef bint _adjacent_violate(long A_part, long B_part):
+    cdef int A = A_part / 9
+    cdef int A_part_form = (A_part - A * 9) / 3
+    cdef int A_part_merge_mode = A_part % 3 
 
-    if A_part.merge_mode == MERGE_MODE_SINGLE and B_part.merge_mode == MERGE_MODE_SINGLE:
+    cdef int B = B_part / 9
+    cdef int B_part_form = (B_part - B * 9) / 3
+    cdef int B_part_merge_mode = B_part % 3 
+
+    cdef bint A_is_root = A_part_form == ROOT
+
+    if A_part_merge_mode == MERGE_MODE_SINGLE and B_part_merge_mode == MERGE_MODE_SINGLE:
         return False
 
     #if B in no_prefixed_by_of and A in no_prefixed_by_of[B]:
@@ -1075,22 +1083,11 @@ cdef void ensure_bucket(long key):
         trie_values[key] = bucket
         
 
-cdef Part get_part(int content, int mode, int merge_mode):
-    global seen
-    cdef long key = content*7 + mode*3 + merge_mode
-    if seen.find(key) != seen.end():
-        return seen[key]
-
-    cdef Part ret
-    ret.content = content
-    ret.mode = mode
-    ret.merge_mode = merge_mode
-    seen[key] = ret
-    return ret
+cdef long get_part(int content, int form, int merge_mode):
+    return (<long>content*9) + (<long>merge_mode*3) + (<long>form)
 
 
 cdef unordered_map[long, vector[Parts]] trie_values
-cdef unordered_map[long, s_Part] seen
 cdef unordered_map[long, int] prefixes_lengths
 
 
@@ -1104,7 +1101,7 @@ def gen():
     global mix_two_morphed_h
     global mix_two_morphed_k
     cdef vector[Parts]* bucket
-    cdef vector[Part] vec_part
+    cdef vector[long] vec_part
     cdef int k, n, i
     cdef long key
 
@@ -1115,7 +1112,7 @@ def gen():
         ensure_bucket(key)
         #print('%-20d: %s'%(key, e))
         bucket = &trie_values[key]
-        vec_part = vector[Part]()
+        vec_part = vector[long]()
         vec_part.push_back(get_part(k, PREFIX, e in single_words_any or e in single_words_only))
         bucket.push_back(Parts(vec_part, 0))
         prefixes_lengths[key] = len(e)
@@ -1132,7 +1129,7 @@ def gen():
         key = hash_string(e)
         ensure_bucket(key)
         bucket = &trie_values[key]
-        vec_part = vector[Part]()
+        vec_part = vector[long]()
         vec_part.push_back(get_part(k, ROOT, e in single_words_any or e in single_words_only))
         bucket.push_back(Parts(vec_part, -ROOT_PUNISHMENT))
         prefixes_lengths[key] = len(e)
@@ -1146,7 +1143,7 @@ def gen():
         key = hash_string(e)
         ensure_bucket(key)
         bucket = &trie_values[key]
-        vec_part = vector[Part]()
+        vec_part = vector[long]()
         vec_part.push_back(get_part(k, SUFFIX, e in single_words_any or e in single_words_only))
         bucket.push_back(Parts(vec_part, 0))
         prefixes_lengths[key] = len(e)
@@ -1168,7 +1165,7 @@ def gen():
         ensure_bucket(ret.key)
         bucket = &trie_values[ret.key]
         
-        vec_part = vector[Part]()
+        vec_part = vector[long]()
         vec_part.push_back(get_part(ret.A, SUFFIX, False))
         vec_part.push_back(get_part(ret.B, SUFFIX, False))
         bucket.push_back(Parts(vec_part, ret.score - 1))
@@ -1182,7 +1179,7 @@ def gen():
         ensure_bucket(ret.key)
         bucket = &trie_values[ret.key]
         
-        vec_part = vector[Part]()
+        vec_part = vector[long]()
         vec_part.push_back(get_part(ret.A, ROOT, False))
         vec_part.push_back(get_part(ret.B, SUFFIX, False))
         bucket.push_back(Parts(vec_part, ret.score-ROOT_PUNISHMENT - 1))
@@ -1197,7 +1194,7 @@ def gen():
         ret2 = ABC_result.content
         ensure_bucket(ret2.key)
         bucket = &trie_values[ret2.key]
-        vec_part = vector[Part]()
+        vec_part = vector[long]()
         vec_part.push_back(get_part(ret2.A, SUFFIX, False))
         vec_part.push_back(get_part(ret2.B, SUFFIX, False))
         vec_part.push_back(get_part(ret2.C, SUFFIX, False))
@@ -1214,7 +1211,7 @@ def gen():
         ret2 = ABC_result.content
         ensure_bucket(ret2.key)
         bucket = &trie_values[ret2.key]
-        vec_part = vector[Part]()
+        vec_part = vector[long]()
         vec_part.push_back(get_part(ret2.A, ROOT, False))
         vec_part.push_back(get_part(ret2.B, SUFFIX, False))
         vec_part.push_back(get_part(ret2.C, SUFFIX, False))
@@ -1233,7 +1230,9 @@ def load_data():
     with open(fn) as f:
         words = f.read()
         
-        
+    alphabets = "abcdefghijklmnopqrstuvwxyz"
+
+    must_have_prefixes = "-"
 
     with open(get_file('single_words.txt')) as f:
         for line in f:
@@ -1384,7 +1383,7 @@ def true_trie_values_to_np():
     cdef Py_ssize_t key, i, j, size, size2
     cdef vector[Parts] vector_parts
     cdef Parts parts
-    cdef Part part
+    cdef long part
     cdef vector[np.int32_t] buffer
 
 
@@ -1411,9 +1410,7 @@ def true_trie_values_to_np():
 
             for j in range(size2):
                 part = parts.contents[j]
-                buffer.push_back(part.content)
-                buffer.push_back(part.mode)
-                buffer.push_back(part.merge_mode)
+                buffer.push_back(part)
 
         inc(it)
 
@@ -1469,7 +1466,7 @@ def true_trie_values_to_np():
 
     return data
 
-
+import zlib
 cdef Trie trie_obj = Trie()
 
 def generate_trie(str path, str name):
@@ -1531,29 +1528,19 @@ def generate_trie(str path, str name):
     data = true_trie_values_to_np()
 
     with open(os.path.join(path, name+'.vals'), 'wb') as f:
-        f.write(data.data.tobytes())
+        f.write(zlib.compress(data.data.tobytes(), level=1))  # level 1 is enough
 
     with open(os.path.join(path, name+'.vocabs'), 'w') as f:
         f.write("\n".join(all_parts_list))
-    '''
-    read back:
-    pynp.frombuffer(f.read(), dtype=pynp.int32)
-    '''
-
-
-
-    all_parts_list
-
-
+        
 
 
 def load(path, name):
-    global
     cdef unordered_set[int] mapping
     cdef vector[Parts] vector_parts
-    cdef vector[Part] vector_part
+    cdef vector[long] vector_part
     cdef Parts parts
-    cdef Part part
+    cdef long part
     cdef np.ndarray[np.int32_t, ndim=1] data
     with open(os.path.join(path, name+'.vocabs')) as f:
         all_parts_list = f.read().split('\n')
@@ -1561,7 +1548,7 @@ def load(path, name):
     trie_obj.load(os.path.join(path, name+'.trie'))
     
     with open(os.path.join(path, name+'.vals'), 'rb') as f:
-        data = pynp.frombuffer(f.read(), dtype=pynp.int32)
+        data = pynp.frombuffer(zlib.decompress(f.read()), dtype=pynp.int32)
         
     cdef np.int32_t v
     cdef int trie_id, i, j, size, size2, part_id
@@ -1571,32 +1558,28 @@ def load(path, name):
 
     while k < max_length and <int>true_trie_values.size() < true_trie_values_size:
         trie_id = data[k]
+        k += 1
         
         vector_parts = vector[Parts]()
         
-        k += 1
         size = data[k]
+        k += 1
         
         for i in range(size):
-            k += 1
             score = (<float>data[k]) / 100
             k += 1
             size2 = data[k]
+            k += 1
             
             
             
-            vector_part = vector[Part]()
+            vector_part = vector[long]()
             for j in range(size2):
-                k += 1
                 
                 vector_part.push_back(
-                    Part(
-                        data[k],
-                        data[k+1],
-                        <bint>data[k+2],
-                    )
+                    data[k]
                 ) 
-                k += 2
+                k += 1
                 
             
             parts = Parts(vector_part, score)
@@ -1604,7 +1587,6 @@ def load(path, name):
             vector_parts.push_back(parts)
         
         true_trie_values[trie_id] = vector_parts
-        k += 1
         
     assert true_trie_values_size == <int>true_trie_values.size(), "true_trie_values size mismatch. Got %s, should be %s"%(true_trie_values.size(), true_trie_values_size)
         
@@ -1773,17 +1755,17 @@ cdef vector[Parts] tokenize_inner(
     int call_depths):
 
     cdef:
-        vector[Part] contents = parts.contents
-        vector[Part] new_contents, temp_contents, append_contents
+        vector[long] contents = parts.contents
+        vector[long] new_contents, temp_contents, append_contents
         float score = parts.score
         float new_score 
         int len_contents = contents.size()
         vector[Parts] returns, cache_value, true_trie_value, to_be_cached, ret
         int cache_length
         Parts temp_parts, new_parts, append_parts
-        Part A_part, B_part, contents_last_part = contents[len_contents-1]
+        long A_part, B_part, contents_last_part = contents[len_contents-1]
         int temp_parts_length, append_contents_length
-        int i, j, k, m, n, p, _cursor, repeated
+        int i, j, k, m, n, p, _cursor, repeated, A_part_form, B_part_form
         vector[int] prefixes_ids
         int len_this, len_ret, len_p
         bint has_root
@@ -1810,7 +1792,7 @@ cdef vector[Parts] tokenize_inner(
             if len_contents+temp_parts_length > max_length:
                 continue
 
-            new_contents = vector[Part]()
+            new_contents = vector[long]()
             for j in range(len_contents):
                 new_contents.push_back(contents[j])
             for j in range(temp_parts_length):
@@ -1862,7 +1844,7 @@ cdef vector[Parts] tokenize_inner(
                     if len_contents+append_contents_length > max_length:
                         continue
 
-                    new_contents = vector[Part]()
+                    new_contents = vector[long]()
                     for j in range(<int>contents.size()):
                         new_contents.push_back(contents[j])
                     for j in range(<int>append_contents.size()):
@@ -1879,7 +1861,8 @@ cdef vector[Parts] tokenize_inner(
                         has_root = False
                         for m in range(len_contents+append_contents_length):
                             A_part = new_contents[m]
-                            if A_part.form == ROOT:
+                            A_part_form = A_part % 3
+                            if A_part_form == ROOT:
                                 has_root = True
                                 break
                         if not has_root:
@@ -1888,17 +1871,19 @@ cdef vector[Parts] tokenize_inner(
                         # ends with prefix and start with suffix is not good
                         for m from len_contents+append_contents_length-1 >= m >= 0: 
                             A_part = new_contents[m]
-                            if A_part.form == PREFIX:
+                            A_part_form = A_part % 3
+                            if A_part_form == PREFIX:
                                 new_score -= 1
                                 break
-                            elif A_part.form == SUFFIX:
+                            elif A_part_form == SUFFIX:
                                 continue
                         for m in range(len_contents+append_contents_length):
                             A_part = new_contents[m]
-                            if A_part.form == SUFFIX:
+                            A_part_form = A_part % 3
+                            if A_part_form == SUFFIX:
                                 new_score -= 1
                                 break
-                            elif A_part.form == PREFIX:
+                            elif A_part_form == PREFIX:
                                 continue
 
                     new_parts = Parts(new_contents, new_score)
@@ -1931,7 +1916,7 @@ cdef vector[Parts] tokenize_inner(
                             if len_contents+temp_parts_length > max_length:
                                 continue
 
-                            new_contents = vector[Part]()
+                            new_contents = vector[long]()
                             for m in range(len_contents):
                                 new_contents.push_back(contents[m])
                             for m in range(temp_parts_length):
@@ -1948,7 +1933,8 @@ cdef vector[Parts] tokenize_inner(
                                 has_root = False
                                 for m in range(len_contents+temp_parts_length):
                                     A_part = new_contents[m]
-                                    if A_part.form == ROOT:
+                                    A_part_form = A_part % 3
+                                    if A_part_form == ROOT:
                                         has_root = True
                                         break
                                 if not has_root:
@@ -1957,17 +1943,19 @@ cdef vector[Parts] tokenize_inner(
                                 # ends with prefix and start with suffix is not good
                                 for m from len_contents+temp_parts_length-1 >= m >= 0: 
                                     A_part = new_contents[m]
-                                    if A_part.form == PREFIX:
+                                    A_part_form = A_part % 3
+                                    if A_part_form == PREFIX:
                                         new_score -= 1
                                         break
-                                    elif A_part.form == SUFFIX:
+                                    elif A_part_form == SUFFIX:
                                         continue
                                 for m in range(len_contents+temp_parts_length):
                                     A_part = new_contents[m]
-                                    if A_part.form == SUFFIX:
+                                    A_part_form = A_part % 3
+                                    if A_part_form == SUFFIX:
                                         new_score -= 1
                                         break
-                                    elif A_part.form == PREFIX:
+                                    elif A_part_form == PREFIX:
                                         continue
 
 
@@ -1985,7 +1973,7 @@ cdef vector[Parts] tokenize_inner(
             break
         if repeated > 0:
             
-            new_parts = Parts(vector[Part](), 0)
+            new_parts = Parts(vector[long](), 0)
             ret = tokenize_inner(
                 word, 
                 cursor+repeated, 
@@ -2015,7 +2003,7 @@ cdef vector[Parts] tokenize_inner(
                     if len_contents+temp_parts_length > max_length:
                         continue
 
-                    new_contents = vector[Part]()
+                    new_contents = vector[long]()
                     for m in range(len_contents):
                         new_contents.push_back(contents[m])
                     for m in range(temp_parts_length):
@@ -2031,7 +2019,8 @@ cdef vector[Parts] tokenize_inner(
                         has_root = False
                         for m in range(len_contents+temp_parts_length):
                             A_part = new_contents[m]
-                            if A_part.form == ROOT:
+                            A_part_form = A_part % 3
+                            if A_part_form == ROOT:
                                 has_root = True
                                 break
                         if not has_root:
@@ -2040,17 +2029,19 @@ cdef vector[Parts] tokenize_inner(
                         # ends with prefix and start with suffix is not good
                         for m from len_contents+temp_parts_length-1 >= m >= 0: 
                             A_part = new_contents[m]
-                            if A_part.form == PREFIX:
+                            A_part_form = A_part % 3
+                            if A_part_form == PREFIX:
                                 new_score -= 1
                                 break
-                            elif A_part.form == SUFFIX:
+                            elif A_part_form == SUFFIX:
                                 continue
                         for m in range(len_contents+temp_parts_length):
                             A_part = new_contents[m]
-                            if A_part.form == SUFFIX:
+                            A_part_form = A_part % 3
+                            if A_part_form == SUFFIX:
                                 new_score -= 1
                                 break
-                            elif A_part.form == PREFIX:
+                            elif A_part_form == PREFIX:
                                 continue
 
 
@@ -2061,7 +2052,8 @@ cdef vector[Parts] tokenize_inner(
             score -= 1
 
             contents.push_back(
-                Part(all_parts[word[cursor]], SUFFIX, False)
+                get_part(all_parts[word[cursor]], SUFFIX, False)
+
 
             )
             len_contents += 1
