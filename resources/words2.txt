@@ -7035,7 +7035,7 @@ symptom,symptomat
 synov,synov-
 synap,synapo-
 synapo-,synap,synapse
-sync,synchro-,synchron-
+sync,synchro-,synchron-,synchron,synchro
 synerg
 syne,since
 synec,synoec
