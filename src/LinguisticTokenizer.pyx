@@ -659,8 +659,8 @@ cdef float ROOT_PUNISHMENT = 0.5
 '''
 
 
-ctypedef (vector[long], float, int  ) Parts
-#           part_ids    score  last 
+ctypedef (vector[long], float, int,  int          ) Parts
+#           part_ids    score  last  len_part_max
 
 
 
@@ -838,6 +838,7 @@ cdef struct AB:
     int A_merge_mode
     int B_merge_mode
     char* morphed
+    int longest_length
     int B_length
     int morphed_length
     long key
@@ -851,6 +852,8 @@ cdef struct ABC:
     int B_merge_mode
     int C_merge_mode
     char* morphed
+    int longest_length
+    int morphed_length
     long key
     float score
     
@@ -867,7 +870,7 @@ cdef vector[AB] morphed_roots_merge_suffixes
 
 
 cdef vector[AB] get_morphed_suffixes_merge_suffixes(int min_left = 1):
-    cdef int len_s, len_p, len_new_morphed
+    cdef int len_s, len_p, len_new_morphed, len_A, len_B
     cdef char* temp_char_star
     cdef char* orig_char_star
     cdef Py_ssize_t converted_size
@@ -903,7 +906,8 @@ cdef vector[AB] get_morphed_suffixes_merge_suffixes(int min_left = 1):
                         (MERGE_MODE_SINGLE if B in single_words_only else 
                         MERGE_MODE_NORMAL))
 
-                    len_s = len(s)
+                    len_s = len_A = len(s)
+                    len_B = len(B)
                     len_p = len(p)
                         
                     if len_s - len_p < min_left:
@@ -931,7 +935,8 @@ cdef vector[AB] get_morphed_suffixes_merge_suffixes(int min_left = 1):
                             A_merge_mode,
                             B_merge_mode,
                             temp_char_star, 
-                            len(B), 
+                            len_B if len_B > len_A else len_A, 
+                            len_B, 
                             len_new_morphed, 
                             hash_string(new_morphed), 
                             score 
@@ -941,7 +946,7 @@ cdef vector[AB] get_morphed_suffixes_merge_suffixes(int min_left = 1):
                 
 
 cdef vector[AB] get_morphed_roots_merge_suffixes(int min_left = 2):
-    cdef int len_s, len_p, len_new_morphed
+    cdef int len_s, len_p, len_new_morphed, len_A, len_B
     cdef float score
     cdef char* temp_char_star
     cdef char* orig_char_star
@@ -974,7 +979,8 @@ cdef vector[AB] get_morphed_roots_merge_suffixes(int min_left = 2):
                         (MERGE_MODE_SINGLE if B in single_words_only else 
                         MERGE_MODE_NORMAL))
 
-                    len_s = len(s)
+                    len_s = len_A = len(s)
+                    len_B = len(B)
                     len_p = len(p)
                         
                     if len_s - len_p < min_left:
@@ -1002,8 +1008,9 @@ cdef vector[AB] get_morphed_roots_merge_suffixes(int min_left = 2):
                             A_merge_mode,
                             B_merge_mode,
                             temp_char_star, 
-                            len(B), 
-                            len(new_morphed), 
+                            len_B if len_B > len_A else len_A, 
+                            len_B, 
+                            len_new_morphed, 
                             hash_string(new_morphed), 
                             score 
                         )
@@ -1091,6 +1098,8 @@ def mix_suffixes_suffixes():
                         B_merge_mode,
                         C_merge_mode, 
                         temp_char_star, 
+                        ab.longest_length if ab.longest_length > bc.longest_length else bc.longest_length,
+                        len_new_morphed,
                         key, 
                         ab.score + bc.score 
                     )
@@ -1168,6 +1177,8 @@ def mix_roots_suffixes():
                         B_merge_mode,
                         C_merge_mode, 
                         temp_char_star, 
+                        ab.longest_length if ab.longest_length > bc.longest_length else bc.longest_length,
+                        len_new_morphed,
                         key, 
                         ab.score + bc.score 
                     )
@@ -1230,10 +1241,12 @@ cdef long get_part(int content, int form, int merge_mode) nogil:
 
 cdef unordered_map[long, vector[Parts]] trie_values
 cdef unordered_map[long, int] prefixes_lengths
+cdef unordered_map[long, int] prefixes_max_part_lengths
 
 
 cdef unordered_map[int, vector[Parts]] true_trie_values
 cdef unordered_map[int, int] true_prefixes_lengths
+cdef unordered_map[int, int] true_prefixes_max_part_lengths
 
 cdef unordered_map[char, int] true_all_alphabets
 
@@ -1270,8 +1283,9 @@ def gen(bint debug=False):
         if debug:
             print('gen >> prefix :: '+e+' [part_id:%s] '%kk )
         vec_part.push_back(kk)
-        bucket.push_back((vec_part, 0, 0))
-        prefixes_lengths[key] = len(e)
+        bucket.push_back((vec_part, 0, 0, 0))
+        prefixes_lengths[key] = prefixes_max_part_lengths[key] = len(e)
+        
         assert len(e) > 0
         assert trie_values[key].size() > 0
 
@@ -1301,8 +1315,8 @@ def gen(bint debug=False):
         if debug:
             print('gen >> roots  :: '+e+' [part_id:%s] '%kk )
         vec_part.push_back(kk)
-        bucket.push_back((vec_part, -ROOT_PUNISHMENT, 0))
-        prefixes_lengths[key] = len(e)
+        bucket.push_back((vec_part, -ROOT_PUNISHMENT, 0, 0))
+        prefixes_lengths[key] = prefixes_max_part_lengths[key] = len(e)
         assert len(e) > 0
         assert trie_values[key].size() > 0
         yield e.encode('utf-8')
@@ -1330,8 +1344,8 @@ def gen(bint debug=False):
         if debug:
             print('gen >> suffix  :: '+e+' [part_id:%s] '%kk )
         vec_part.push_back(kk)
-        bucket.push_back((vec_part, 0, 0))
-        prefixes_lengths[key] = len(e)
+        bucket.push_back((vec_part, 0, 0, 0))
+        prefixes_lengths[key] = prefixes_max_part_lengths[key] = len(e)
         assert len(e) > 0
         assert trie_values[key].size() > 0
         yield e.encode('utf-8')
@@ -1362,8 +1376,8 @@ def gen(bint debug=False):
 
         vec_part.push_back(get_part(ret.A, SUFFIX, ret.A_merge_mode))
         vec_part.push_back(get_part(ret.B, SUFFIX, ret.B_merge_mode))
-        bucket.push_back((vec_part, ret.score - 1, 0))
-        
+        bucket.push_back((vec_part, ret.score - 1, 0, 0))
+        prefixes_max_part_lengths[ret.key] = ret.longest_length
         prefixes_lengths[ret.key] = ret.morphed_length
         yield (<bytes>ret.morphed)
         
@@ -1382,8 +1396,9 @@ def gen(bint debug=False):
         vec_part.reserve(2)
         vec_part.push_back(get_part(ret.A, ROOT, ret.A_merge_mode))
         vec_part.push_back(get_part(ret.B, SUFFIX, ret.B_merge_mode))
-        bucket.push_back((vec_part, ret.score-ROOT_PUNISHMENT - 1, 0))
+        bucket.push_back((vec_part, ret.score-ROOT_PUNISHMENT - 1, 0, 0))
         
+        prefixes_max_part_lengths[ret.key] = ret.longest_length
         prefixes_lengths[ret.key] = ret.morphed_length
         yield (<bytes>ret.morphed)
 
@@ -1409,8 +1424,10 @@ def gen(bint debug=False):
         vec_part.push_back(get_part(ret2.A, SUFFIX, ret2.A_merge_mode))
         vec_part.push_back(get_part(ret2.B, SUFFIX, ret2.B_merge_mode))
         vec_part.push_back(get_part(ret2.C, SUFFIX, ret2.C_merge_mode))
-        bucket.push_back((vec_part, ret2.score - 2, 0))
+        bucket.push_back((vec_part, ret2.score - 2, 0, 0))
 
+        prefixes_max_part_lengths[ret2.key] = ret2.longest_length
+        prefixes_lengths[ret2.key] = ret2.morphed_length
         yield (<bytes>ret2.morphed)
         free(stay_alive[stay_alive.size()-1])
         stay_alive.pop_back()
@@ -1436,8 +1453,10 @@ def gen(bint debug=False):
         vec_part.push_back(get_part(ret2.A, ROOT, ret2.A_merge_mode))
         vec_part.push_back(get_part(ret2.B, SUFFIX, ret2.B_merge_mode))
         vec_part.push_back(get_part(ret2.C, SUFFIX, ret2.C_merge_mode))
-        bucket.push_back((vec_part, ret2.score-ROOT_PUNISHMENT - 2, 0))
+        bucket.push_back((vec_part, ret2.score-ROOT_PUNISHMENT - 2, 0, 0))
         
+        prefixes_max_part_lengths[ret2.key] = ret2.longest_length
+        prefixes_lengths[ret2.key] = ret2.morphed_length
         yield (<bytes>ret2.morphed)
         free(stay_alive[stay_alive.size()-1])
         stay_alive.pop_back()
@@ -1758,6 +1777,20 @@ def true_trie_values_to_np():
 
         inc(it3)
 
+    cdef unordered_map[int, int].iterator it4 = true_prefixes_max_part_lengths.begin()
+    cdef unordered_map[int, int].iterator end4 = true_prefixes_max_part_lengths.end()
+
+    buffer.push_back(true_prefixes_max_part_lengths.size())
+
+    while it4 != end4:
+        trie_id = deref(it4).first
+        length = deref(it4).second
+
+        buffer.push_back(trie_id)
+        buffer.push_back(length)
+
+        inc(it4)
+
 
     buffer.push_back(len(all_alphabets))
     for ch in all_alphabets:
@@ -1828,6 +1861,20 @@ def generate_trie(str path, str name, bint debug=False):
         true_prefixes_lengths[temp_mapping[key]] = length
 
         inc(it2)
+
+    cdef unordered_map[long, int].iterator it3 = prefixes_max_part_lengths.begin()
+    cdef unordered_map[long, int].iterator end3 = prefixes_max_part_lengths.end()
+    while it3 != end3:
+        key = deref(it3).first
+        length = deref(it3).second
+        true_prefixes_max_part_lengths[temp_mapping[key]] = length
+
+        inc(it3)
+
+
+
+
+        
 
     data = true_trie_values_to_np()
 
@@ -1915,7 +1962,7 @@ def load(path, name, bint profile=False, bint debug=False):
             if debug:
                 print(' '.join((all_parts_list[e//9-1]+' (%s)'%(FORMS[e%3])   ) for e in vector_part) +  'score: %s'%( score))
             
-            parts = (vector_part, score, 0)
+            parts = (vector_part, score, 0, 0)
         
             vector_parts.push_back(parts)
         
@@ -2008,6 +2055,19 @@ def load(path, name, bint profile=False, bint debug=False):
     
     assert size == <int>true_prefixes_lengths.size(), \
         "true_prefixes_lengths size mismatch. Got %s, should be %s"%(true_prefixes_lengths.size(), size)
+    
+
+
+    size = data[k]; k += 1
+    for i in range(size):
+        part_id = data[k]; k += 1
+        true_prefixes_max_part_lengths[part_id] = data[k]; k += 1
+    
+    assert size == <int>true_prefixes_max_part_lengths.size(), \
+        "true_prefixes_lengths size mismatch. Got %s, should be %s"%(true_prefixes_max_part_lengths.size(), size)
+    
+
+
     
     #print('true_prefixes_lengths:', true_prefixes_lengths.size() )
 
@@ -2112,7 +2172,7 @@ cdef vector[Parts] _tokenize_word_candidates(char* chars, int length, int max_ca
     
 
     while cont:
-        parts = (contents, 0, 0)
+        parts = (contents, 0, 0, 0)
         results = vector[Parts]()
         results.reserve(1024)
         tokenize_inner(chars, cursor, length, parts, &cache, max_call_depth, &max_score, min_score_ratio, call_depth, &results)
@@ -2181,7 +2241,7 @@ cdef vector[long] _tokenize_word(char* chars, int length, int max_call_depth, fl
     
 
     while cont:
-        parts = (contents, 0, 0)
+        parts = (contents, 0, 0, 0)
         results = vector[Parts]()
         results.reserve(1024)
         tokenize_inner(chars, cursor, length, parts, &cache, max_call_depth, &max_score, min_score_ratio, call_depth, &results)
@@ -2216,11 +2276,12 @@ cdef vector[long] _tokenize_word(char* chars, int length, int max_call_depth, fl
     i = 0
     cmp_max_score = -100
 
-    if results[j][2] == length:
-        score = results[j][1]
-        if score > cmp_max_score:
-            cmp_max_score = score
-            i = j
+    for j in range(size):
+        if results[j][2] == length:
+            score = results[j][1]
+            if score > cmp_max_score:
+                cmp_max_score = score
+                i = j
 
 
     result_contents.insert(result_contents.end(),results[i][0].begin(),results[i][0].end())
@@ -2261,7 +2322,7 @@ cdef void tokenize_inner(
         int temp_parts_length
         int i, j, k, m, n, p, _cursor, repeated, A_part_form, B_part_form
         vector[int] prefixes_ids
-        int len_this, len_ret, len_p
+        int len_this, len_ret, len_p, len_part_max
         bint has_root
         
     if call_depth > max_call_depth:
@@ -2320,7 +2381,7 @@ cdef void tokenize_inner(
             if new_score < max_score[0] * min_score_ratio:
                 continue
 
-            returns.push_back((new_contents, new_score, temp_parts[0][2])) 
+            returns.push_back((new_contents, new_score, temp_parts[0][2], temp_parts[0][3])) 
     
         return
 
@@ -2345,12 +2406,14 @@ cdef void tokenize_inner(
                 print(' '*call_depth + '#############')
                 print(' ')
 
+        # below is no need now, length penalty will be calculated at last
         # iterate the prefixes in descending order in length
         # i.e. internal  ->  in, inter, intern
         for i from prefixes_ids.size()-1 >= i >= 0: 
             p = prefixes_ids[i]
             # assert true_prefixes_lengths.find(p) != true_prefixes_lengths.end(), "A: true_prefixes_lengths.find(p) != true_prefixes_lengths.end()"
             len_p = true_prefixes_lengths[p]
+            len_part_max = true_prefixes_max_part_lengths[p]
             matched = True
             true_trie_value = &true_trie_values[p]
 
@@ -2362,6 +2425,7 @@ cdef void tokenize_inner(
                 temp_parts = &(true_trie_value[0][j])
                 temp_contents = &(temp_parts[0][0])
                 temp_parts_length = temp_contents.size()
+                len_part_max = temp_parts[0][3] if temp_parts[0][3] > len_part_max else len_part_max
                 # assert temp_parts_length > 0, "B: assert temp_parts_length > 0"
 
                 IF DEBUG:
@@ -2377,7 +2441,7 @@ cdef void tokenize_inner(
                 # split ends here
                 # cursor + len_p == length
                 if len_p == len_this or call_depth >= max_call_depth: 
-                    to_be_cached.push_back((temp_parts[0][0], temp_parts[0][1], cursor+len_p))
+                    to_be_cached.push_back((temp_parts[0][0], temp_parts[0][1], cursor+len_p, len_part_max))
                     
                     if len_contents > 0:
                         A_part = contents[len_contents-1]
@@ -2469,7 +2533,7 @@ cdef void tokenize_inner(
                     IF DEBUG:
                         with gil:
                             print(' '*call_depth + 'new_parts: %r'%((new_contents, new_score),))
-                    returns.push_back((new_contents, new_score, cursor + len_p)) 
+                    returns.push_back((new_contents, new_score, cursor + len_p, len_part_max)) 
 
                 else:
                     ret = vector[Parts]()
@@ -2590,7 +2654,7 @@ cdef void tokenize_inner(
                             IF DEBUG:
                                 with gil:
                                     print(' '*call_depth + 'new_parts: %r'%((new_contents, new_score),))
-                            returns.push_back((new_contents, new_score, temp_parts[0][2])) 
+                            returns.push_back((new_contents, new_score, temp_parts[0][2], len_part_max)) 
 
                             
         repeated = 0
@@ -2602,7 +2666,7 @@ cdef void tokenize_inner(
             break
         if repeated > 0:
             
-            new_parts = (vector[long](), 0, 0)
+            new_parts = (vector[long](), 0, 0, 0)
             ret = vector[Parts]()
             ret.reserve(1024)
             tokenize_inner(
@@ -2688,7 +2752,7 @@ cdef void tokenize_inner(
                     if new_score < max_score[0] * min_score_ratio:
                         continue
 
-                    returns.push_back((new_contents, new_score, temp_parts[0][2])) 
+                    returns.push_back((new_contents, new_score, temp_parts[0][2], temp_parts[0][3])) 
 
         else:
             score -= 1
@@ -2697,7 +2761,7 @@ cdef void tokenize_inner(
                     get_part(true_all_alphabets[word[cursor]], ROOT, MERGE_MODE_BOTH)
                 )
                 len_contents += 1
-                parts = (contents, score, cursor+1)
+                parts = (contents, score, cursor+1, 0)
 
         cache[0][cursor] = to_be_cached
         if matched:
