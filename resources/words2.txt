@@ -1,4 +1,4 @@
-',-'
+',-','-
 'll,-'ll
 -'s,'s
 a
@@ -101,7 +101,7 @@ account
 accoutrement
 accrete
 accrue
-acct.
+acct
 accur
 accuse
 -ace
@@ -1847,7 +1847,7 @@ chol-,chole-
 chole
 cholecyst-,cholecysto-
 cholesterol
-chondrio-, chondro-
+chondrio-,chondro-
 chong
 choose
 chord
@@ -3458,7 +3458,7 @@ glosso-,gloss
 glott
 glove
 glow
-gluco-,glucose,gluco
+gluco-,glucose,glucos,gluco
 glue
 glyc-
 glyc-,glyco-
@@ -3872,7 +3872,7 @@ ice
 -icle
 -id
 id
--ide
+-ide|+e
 idea,ideo-,ideo
 ideal
 ident
@@ -4025,6 +4025,7 @@ intric
 interest
 interfere
 interne,intern
+internet
 intervene
 intim
 into
@@ -4041,13 +4042,12 @@ involve
 -io
 iod-,iod,iodo-
 -sion,-ion|+de
--ption,-ion|+b
+-ption,-ion|+e,+b
 -ition,-ion|+e
 -ssion,-ion|+t,+de
 -tion,-ion|+d
 -ion|+io,+e
 -unition,-ion|+o
--ption,-ion|+e
 ion
 -ior,-or|+e
 -iot
@@ -4627,7 +4627,7 @@ mammon
 mammoth
 mammy
 man,men,-man,-sman,-men
-maniac,-maniac, mania
+maniac,-maniac,mania
 manic
 manich
 manicotti
@@ -4737,7 +4737,8 @@ mention
 mentor
 menth
 menu
-meowmnemon
+meow
+mnemon
 meph,meph-
 mer,-mer
 mer-
