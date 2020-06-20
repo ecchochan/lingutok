@@ -6096,6 +6096,7 @@ rhythm
 -ri,-ry
 rib
 ribbon,ribband
+ribose,ribo-
 rice
 rich
 richard
@@ -7993,4 +7994,4 @@ zu
 zue
 zuo
 zygo-
-zym-,zymo-,zym,zymo
+zym-,zymo-,zym,zymo,zyme
