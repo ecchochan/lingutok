@@ -4080,7 +4080,7 @@ isa
 isbn
 isch-,isch,ischio-
 ischno,ischn
--ize,-ise,-tise,-tize|+y
+-ize,-ise|+y
 -ise|+y
 -se,-ze
 -ish|+e
@@ -5964,7 +5964,7 @@ record
 recover
 recruit
 rect-,rect
-red-,red,protan-,protan
+red,protan-,protan
 redempt,redeem
 reduct,reduce
 redund

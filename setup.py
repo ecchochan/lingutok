@@ -32,7 +32,10 @@ ext_modules = [
         "src/query.cpp",
         "src/std_iostream.cpp",
         "src/trie.cpp"
-    ], include_dirs=[MARISA_INCLUDE_DIR]),
+    ], 
+    include_dirs=[MARISA_INCLUDE_DIR],
+    extra_compile_args=['-fopenmp'],
+    extra_link_args=['-fopenmp'],),
 ]
 
 setup(

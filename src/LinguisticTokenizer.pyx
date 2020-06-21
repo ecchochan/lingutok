@@ -1,6 +1,8 @@
 #defining NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 # cython: profile=False, embedsignature=True, boundscheck=False, wraparound=False, nonecheck=False, cdivision=True, language_level=2, language=c++
 #distutils: language = c++
+# distutils: extra_compile_args = -openmp
+# distutils: extra_link_args = -openmp
 
 from __future__ import unicode_literals
 
@@ -719,7 +721,7 @@ cdef unordered_map[int, unordered_set[int]] true_no_suffixed_by_of = unordered_m
 cdef unordered_map[int, unordered_set[int]] true_no_suffixed_by_of_roots = unordered_map[int, unordered_set[int]]()
 cdef unordered_map[int, unordered_set[int]] true_no_suffixed_by_of_nonroots = unordered_map[int, unordered_set[int]]()
 
-
+'''
 cdef bint adjacent_violate(long A_part, long B_part):
     cdef int A_key = A_part / 9
     cdef int A_part_merge_mode = (A_part - A_key * 9) / 3
@@ -752,7 +754,7 @@ cdef bint adjacent_violate(long A_part, long B_part):
     if A in no_suffixed_by_of and B in no_suffixed_by_of[A]:
         return True
     return False
-
+'''
 
 from time import sleep
 
@@ -1468,6 +1470,7 @@ all_alphabets = ""
 def load_data(alphabets = "abcdefghijklmnopqrstuvwxyz", debug=False):
     global vocab_id, part_id, all_alphabets
     all_alphabets = alphabets
+    
     fn = get_file('words2.txt')
     with open(fn) as f:
         words = f.read()
@@ -1489,6 +1492,7 @@ def load_data(alphabets = "abcdefghijklmnopqrstuvwxyz", debug=False):
                 MERGE_MODE_BOTH
                 )] = vocab_id - 1
 
+    '''
     must_have_prefixes = "-"
     for e in must_have_prefixes:
         vocab_id += 1
@@ -1514,7 +1518,7 @@ def load_data(alphabets = "abcdefghijklmnopqrstuvwxyz", debug=False):
                 SUFFIX, 
                 MERGE_MODE_BOTH
                 )] = vocab_id - 1
-
+    '''
 
     with open(get_file('single_words.txt')) as f:
         for line in f:
@@ -1893,9 +1897,18 @@ cdef double get_time():
     current = ts.tv_sec + (ts.tv_nsec / 1000000000.)
     return current 
 
+cimport openmp
+cdef openmp.omp_lock_t lock
+openmp.omp_init_lock(&lock)
+cdef bint loaded = False
 
-def load(path, name, bint profile=False, bint debug=False):
-    global all_parts_list
+
+
+
+
+def load(str path, str name, bint profile=False, bint debug=False):
+    global all_parts_list, loaded
+    openmp.omp_set_lock(&lock)
     cdef unordered_set[int] mapping
     cdef vector[Parts] vector_parts
     cdef vector[long] vector_part
@@ -2084,6 +2097,10 @@ def load(path, name, bint profile=False, bint debug=False):
     if profile:
         t1 = get_time()
         print('vals loaded in %.4f s'%(t1-t0))
+
+    loaded = True
+
+    openmp.omp_unset_lock(&lock)
         
 
 
@@ -2123,11 +2140,21 @@ def load(path, name, bint profile=False, bint debug=False):
 
 
 
+MIN_SCORE_RATIO = 1.25
 
+cdef int tokenize_word_auto(char* chars, int length, vector[long]* result_contents):
+    cdef int max_call_depth 
 
+    if length > 16:
+        max_call_depth = 2
+    elif length > 8:
+        max_call_depth = 3
+    else:
+        max_call_depth = 4
 
+    _tokenize_word(chars, length, result_contents, max_call_depth, MIN_SCORE_RATIO, False)
 
-
+    return 1
 
 
 def tokenize_word(str word, int max_call_depth = 3, float min_score_ratio = 1.5, bint return_candidates = False, bint debug=False):
@@ -2149,7 +2176,12 @@ def tokenize_word(str word, int max_call_depth = 3, float min_score_ratio = 1.5,
 
     if return_candidates:
         return _tokenize_word_candidates(<char *>b_word, length, max_call_depth, min_score_ratio, debug)
-    return _tokenize_word(<char *>b_word, length, max_call_depth, min_score_ratio, debug)
+
+    cdef vector[long] result_contents = vector[long]()
+
+    _tokenize_word(<char *>b_word, length, &result_contents, max_call_depth, min_score_ratio, debug)
+
+    return result_contents
 
 
 cdef vector[Parts] _tokenize_word_candidates(char* chars, int length, int max_call_depth, float min_score_ratio, bint debug) nogil:
@@ -2186,7 +2218,7 @@ cdef vector[Parts] _tokenize_word_candidates(char* chars, int length, int max_ca
             if results[j][2] == length:
                 cont = False
                 break
-            score = results[j][1] + results[j][0].size()
+            score = <float>results[j][1] + (<float>results[j][3] / 1000) + results[j][0].size()
             if score > cmp_max_score:
                 cmp_max_score = score
                 i = j
@@ -2208,7 +2240,7 @@ cdef vector[Parts] _tokenize_word_candidates(char* chars, int length, int max_ca
             with gil:
                 g = list(results)
                 g.sort(key=lambda x: x[1] + len(x[0]), reverse=True)
-                for e in [(' '.join((all_parts_list[e//9-1]+' (%s)'%FORMS[e%3]   ) for e in a), b+len(a), c) for a, b, c in g][:5]:
+                for e in [(' '.join((all_parts_list[e//9-1]+' (%s)'%FORMS[e%3]   ) for e in a), b+d/1000+len(a), c) for a, b, c, d in g][:5]:
                     print(e)
                 print('cursor: %s'%cursor)
                 print(' ')
@@ -2222,16 +2254,16 @@ cdef vector[Parts] _tokenize_word_candidates(char* chars, int length, int max_ca
 
     return results
 
-cdef vector[long] _tokenize_word(char* chars, int length, int max_call_depth, float min_score_ratio, bint debug) nogil:
+cdef int _tokenize_word(char* chars, int length, vector[long]* result_contents, int max_call_depth, float min_score_ratio, bint debug) nogil:
     cdef:
         int i = 0, j = 0
-        int cursor = 0, size, result_contents_size
+        int cursor = 0, size
         vector[vector[Parts]] cache = vector[vector[Parts]]()
-        vector[long] contents = vector[long](), result_contents = vector[long]()
+        vector[long] contents = vector[long]()
         Parts parts
         int call_depth = 0
         float max_score = -100
-        bint cont = True, first=True
+        bint cont = True
         float cmp_max_score , score
         vector[Parts] results
 
@@ -2267,8 +2299,6 @@ cdef vector[long] _tokenize_word(char* chars, int length, int max_call_depth, fl
 
         contents = vector[long]()
         contents.push_back(results[i][0][results[i][0].size() - 1])
-
-        first = False
         
         cursor = results[i][2]
 
@@ -2278,7 +2308,7 @@ cdef vector[long] _tokenize_word(char* chars, int length, int max_call_depth, fl
 
     for j in range(size):
         if results[j][2] == length:
-            score = results[j][1]
+            score = <float>results[j][1] + (<float>results[j][3] / 1000)
             if score > cmp_max_score:
                 cmp_max_score = score
                 i = j
@@ -2287,7 +2317,7 @@ cdef vector[long] _tokenize_word(char* chars, int length, int max_call_depth, fl
     result_contents.insert(result_contents.end(),results[i][0].begin(),results[i][0].end())
 
 
-    return result_contents
+    return 1
 
 
 FORMS = 'PRS'
@@ -2322,7 +2352,7 @@ cdef void tokenize_inner(
         int temp_parts_length
         int i, j, k, m, n, p, _cursor, repeated, A_part_form, B_part_form
         vector[int] prefixes_ids
-        int len_this, len_ret, len_p, len_part_max
+        int len_this, len_ret, len_p, len_p_part_max, len_part_max = parts[3]
         bint has_root
         
     if call_depth > max_call_depth:
@@ -2381,7 +2411,7 @@ cdef void tokenize_inner(
             if new_score < max_score[0] * min_score_ratio:
                 continue
 
-            returns.push_back((new_contents, new_score, temp_parts[0][2], temp_parts[0][3])) 
+            returns.push_back((new_contents, new_score, temp_parts[0][2], temp_parts[0][3] if temp_parts[0][3] > len_part_max else len_part_max)) 
     
         return
 
@@ -2413,9 +2443,11 @@ cdef void tokenize_inner(
             p = prefixes_ids[i]
             # assert true_prefixes_lengths.find(p) != true_prefixes_lengths.end(), "A: true_prefixes_lengths.find(p) != true_prefixes_lengths.end()"
             len_p = true_prefixes_lengths[p]
-            len_part_max = true_prefixes_max_part_lengths[p]
+            len_p_part_max = true_prefixes_max_part_lengths[p]
             matched = True
             true_trie_value = &true_trie_values[p]
+
+            len_p_part_max = len_part_max if len_part_max > len_p_part_max else len_p_part_max
 
 
             # iterate the possible parts
@@ -2425,7 +2457,7 @@ cdef void tokenize_inner(
                 temp_parts = &(true_trie_value[0][j])
                 temp_contents = &(temp_parts[0][0])
                 temp_parts_length = temp_contents.size()
-                len_part_max = temp_parts[0][3] if temp_parts[0][3] > len_part_max else len_part_max
+                
                 # assert temp_parts_length > 0, "B: assert temp_parts_length > 0"
 
                 IF DEBUG:
@@ -2441,7 +2473,7 @@ cdef void tokenize_inner(
                 # split ends here
                 # cursor + len_p == length
                 if len_p == len_this or call_depth >= max_call_depth: 
-                    to_be_cached.push_back((temp_parts[0][0], temp_parts[0][1], cursor+len_p, len_part_max))
+                    to_be_cached.push_back((temp_parts[0][0], temp_parts[0][1], cursor+len_p, len_p_part_max))
                     
                     if len_contents > 0:
                         A_part = contents[len_contents-1]
@@ -2533,7 +2565,7 @@ cdef void tokenize_inner(
                     IF DEBUG:
                         with gil:
                             print(' '*call_depth + 'new_parts: %r'%((new_contents, new_score),))
-                    returns.push_back((new_contents, new_score, cursor + len_p, len_part_max)) 
+                    returns.push_back((new_contents, new_score, cursor + len_p, len_p_part_max)) 
 
                 else:
                     ret = vector[Parts]()
@@ -2578,7 +2610,9 @@ cdef void tokenize_inner(
                                         )
                                     )
 
-                            to_be_cached.push_back(temp_parts[0])
+                            to_be_cached.push_back(
+                                (temp_parts[0][0], temp_parts[0][1], temp_parts[0][2], temp_parts[0][3] if temp_parts[0][3] > len_p_part_max else len_p_part_max)
+                                )
 
                             new_contents = vector[long]()
                             new_contents.reserve(len_contents+temp_parts_length)
@@ -2654,7 +2688,7 @@ cdef void tokenize_inner(
                             IF DEBUG:
                                 with gil:
                                     print(' '*call_depth + 'new_parts: %r'%((new_contents, new_score),))
-                            returns.push_back((new_contents, new_score, temp_parts[0][2], len_part_max)) 
+                            returns.push_back((new_contents, new_score, temp_parts[0][2], temp_parts[0][3] if temp_parts[0][3] > len_p_part_max else len_p_part_max)) 
 
                             
         repeated = 0
@@ -2702,7 +2736,9 @@ cdef void tokenize_inner(
                     #if len_contents+temp_parts_length > max_call_depth:
                     #    continue
 
-                    to_be_cached.push_back(temp_parts[0])
+                    to_be_cached.push_back(
+                        (temp_parts[0][0], temp_parts[0][1], temp_parts[0][2], temp_parts[0][3] if temp_parts[0][3] > len_part_max else len_part_max)
+                        )
 
 
                     new_contents = vector[long]()
@@ -2752,7 +2788,7 @@ cdef void tokenize_inner(
                     if new_score < max_score[0] * min_score_ratio:
                         continue
 
-                    returns.push_back((new_contents, new_score, temp_parts[0][2], temp_parts[0][3])) 
+                    returns.push_back((new_contents, new_score, temp_parts[0][2], temp_parts[0][3] if temp_parts[0][3] > len_part_max else len_part_max)) 
 
         else:
             score -= 1
@@ -2761,7 +2797,7 @@ cdef void tokenize_inner(
                     get_part(true_all_alphabets[word[cursor]], ROOT, MERGE_MODE_BOTH)
                 )
                 len_contents += 1
-                parts = (contents, score, cursor+1, 0)
+                parts = (contents, score, cursor+1, len_part_max)
 
         cache[0][cursor] = to_be_cached
         if matched:
