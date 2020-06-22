@@ -14,6 +14,9 @@ cimport agent
 cimport trie
 cimport iostream
 cimport base
+from utf8proc cimport utf8proc_NFKD_strip
+
+
 
 import itertools
 import struct
@@ -661,7 +664,7 @@ cdef float ROOT_PUNISHMENT = 0.5
 '''
 
 
-ctypedef (vector[long], float, int,  int          ) Parts
+ctypedef (vector[int], float, int,  int          ) Parts
 #           part_ids    score  last  len_part_max
 
 
@@ -683,11 +686,361 @@ import json
 def get_file(x):
     return resource_filename(package_name, 'resources/' + x)
 
+
+cdef int SPECIAL_TOKEN_CLS  = 2
+cdef int SPECIAL_TOKEN_SEP  = 3
+cdef int SPECIAL_TOKEN_MASK = 5
+cdef int SPECIAL_TOKEN_PAD  = 0
+cdef int SPECIAL_TOKEN_UNK  = 1
+cdef int SPECIAL_TOKEN_NL   = 10
+
+cdef unordered_map[int, int*] replacements
+cdef int* replacement_temp
+cdef int L, i
+fn = get_file('zh_char2str_mapping.txt')
+with open(fn) as f:
+    for line in f:
+        line = line[:len(line)-1]
+        if not line:
+            continue
+        splitted = line.split('\t')
+        if len(splitted) != 2:
+            continue
+        a, b = splitted
+        assert len(a) == 1
+        L = len(b)
+        replacement_temp = <int*> malloc(sizeof(int) * (L+1))
+        replacement_temp[0] = L
+        for i in range(L):
+            replacement_temp[i+1] = ord(b[i])
+            
+        replacements[ord(a)] = replacement_temp
+
+
+custom_mapping = {
+    '\r': (ord(' '),),
+    '\t': (ord(' '),),
+}
+for k, v in custom_mapping.items():
+    L = len(v)
+    replacement_temp = <int*> malloc(sizeof(int) * (L+1))
+    replacement_temp[0] = L
+    for i in range(L):
+        replacement_temp[i+1] = v[i]
+    replacements[ord(k)] = replacement_temp
+
+
+
+
+
+
+
+'''
+# Embedded in iter_unicode
+
+SPECIAL_TOKENS = {
+    '<s>',
+    '</s>',
+    '<mask>',
+    '<pad>',
+    '<unk>',
+    '<nl>',
+}
+'''
+cdef int _2_6 = 2**6
+cdef int _2_12 = 2**12
+cdef int _2_18 = 2**18
+cdef int iter_unicode(const unsigned char[:] chars, vector[int]* bucket, bint keep_nl) nogil:
+    cdef:
+        size_t length = chars.shape[0]
+        unsigned char lb, last_lb = 0
+        size_t cursor = 0, repl_size, i,  en_char_length
+        char size = 0
+        int code
+        int* repl
+        
+        size_t cased_count = 0
+        
+    bucket.reserve(length)
+        
+    while cursor < length:
+        lb = chars[cursor]
+        if (lb - 0xc2) > (0xf4-0xc2):
+            return -1
+        if lb < 0x80:
+            size = 1
+            code = lb
+            
+            if last_lb == 60: # '<' 
+                # check <s>
+                if lb == 115 and length - cursor >= 2:  # 3 - 1
+                    if (
+                        chars[cursor+1] == 62   # >
+                    ): 
+                        bucket.pop_back() # remove '<'
+                        bucket.push_back(SPECIAL_TOKEN_CLS)
+                        size = 2  # 3 - 1
+                        cursor += size
+                        last_lb = 0
+                        continue
+                     
+                # check </s>
+                elif lb == 47 and length - cursor >= 3:  # 4 - 1
+                    if (
+                        chars[cursor+1] == 115 and  # s
+                        chars[cursor+2] == 62       # >
+                    ): 
+                        bucket.pop_back() # remove '<'
+                        bucket.push_back(SPECIAL_TOKEN_SEP)
+                        size = 3  # 4 - 1
+                        cursor += size
+                        last_lb = 0
+                        continue
+                        
+                # check <mask>  (109, 97, 115, 107)
+                elif lb == 109 and length - cursor >= 5:  # 6 - 1
+                    if (
+                        chars[cursor+1] == 97 and   # a
+                        chars[cursor+2] == 115 and  # s
+                        chars[cursor+3] == 107 and  # k
+                        chars[cursor+4] == 62       # >
+                    ): 
+                        bucket.pop_back() # remove '<'
+                        bucket.push_back(SPECIAL_TOKEN_MASK)
+                        size = 5  # 6 - 1
+                        cursor += size
+                        last_lb = 0
+                        continue
+                    
+                # check <pad>  (112, 97, 100)
+                elif lb == 112 and length - cursor >= 4:  # 5 - 1
+                    if (
+                        chars[cursor+1] == 97 and   # a
+                        chars[cursor+2] == 100 and  # d
+                        chars[cursor+3] == 62       # >
+                    ): 
+                        bucket.pop_back() # remove '<'
+                        bucket.push_back(SPECIAL_TOKEN_PAD)
+                        size = 4  # 5 - 1
+                        cursor += size
+                        last_lb = 0
+                        continue
+                    
+                # check <unk>  (117, 110, 107)
+                elif lb == 117 and length - cursor >= 4:  # 5 - 1
+                    if (
+                        chars[cursor+1] == 110 and   # a
+                        chars[cursor+2] == 107 and  # d
+                        chars[cursor+3] == 62       # >
+                    ): 
+                        bucket.pop_back() # remove '<'
+                        bucket.push_back(SPECIAL_TOKEN_UNK)
+                        size = 4  # 5 - 1
+                        cursor += size
+                        last_lb = 0
+                        continue
+                    
+                # check <nl>  (110, 108)
+                elif lb == 110 and length - cursor >= 3:  # 4 - 1
+                    if (
+                        chars[cursor+1] == 108 and   # l
+                        chars[cursor+2] == 62        # >
+                    ): 
+                        bucket.pop_back() # remove '<'
+                        bucket.push_back(SPECIAL_TOKEN_NL)
+                        size = 3  # 4 - 1
+                        cursor += size
+                        last_lb = 0
+                        continue
+                    
+            
+        elif lb < 0xE0:
+            size = 2
+            if cursor + size > length:
+                return -1
+            
+            #code = (a & 0b00000111)*2**6  + (b & 0b00111111)
+            #code = (lb & 0b00000111)*_2_6 + (chars[cursor+1] & 0b00111111)
+            code = ((lb & 0x1f)<<6) | (chars[cursor+1] & 0x3f)
+            
+            
+        elif lb < 0xF0:
+            size = 3
+            if cursor + size > length:
+                return -1
+            
+            #code = (a & 0b00000111)*2**12  + (b & 0b00111111) * 2**6 + (c & 0b00111111 )
+            #code = (lb & 0b00000111)*_2_12 + (chars[cursor+1] & 0b00111111)*_2_6 + (chars[cursor+2] & 0b00111111)
+            code = ((lb & 0xf)<<12) | ((chars[cursor+1] & 0x3f)<<6) | (chars[cursor+2] & 0x3f);
+            
+        elif ( lb & 0xF8 ) == 0xF0:
+            size = 4
+            if cursor + size > length:
+                return -1
+            
+            #code = (a & 0b00000111)*2**18  + (b & 0b00111111) * 2**12 + (c & 0b00111111 ) * 2**6 + (d & 0b00111111 )
+            #code = (lb & 0b00000111)*_2_18 + (chars[cursor+1] & 0b00111111)*_2_12 + (chars[cursor+2] & 0b00111111)*_2_6 + (chars[cursor+3] & 0b00111111)
+            code = ((lb & 7)<<18) | ((chars[cursor+1] & 0x3f)<<12) | ((chars[cursor+2] & 0x3f)<<6) | (chars[cursor+3] & 0x3f)
+            
+        else:
+            return -2
+            
+            
+        # Normalize some unicode
+        if replacements.find(code) != replacements.end():
+            repl = replacements[code]+1
+            repl_size = repl[-1]
+            
+        else:
+            repl = &code
+            repl_size = 1
+            
+        for i in range(repl_size):
+            code = repl[i]
+            # check a-z (97-122) or A-Z (65-90) or ' (39)
+            if (code >= 97 and code <= 122) or code == 39:
+                en_char_length += 1
+            elif (code >= 65 and code <= 90):
+                cased_count += 1
+                en_char_length += 1
+                
+            elif code == 10:
+                cased_count = 0
+                en_char_length = 0
+                if keep_nl:
+                    bucket.push_back(SPECIAL_TOKEN_NL)
+                    
+            elif code == 32:
+                cased_count = 0
+                en_char_length = 0
+                
+            else:
+                if en_char_length > 0:
+                    # Situation:   `::!! english `
+                    #                           ^ cursor
+                    # en_char_length: 7
+                    #
+                    # char span:      [cusor - 7, cursor-1]  (i.e. inclusive)
+                    #
+                    
+                        
+                    pass
+                        
+                    
+                cased_count = 0
+                en_char_length = 0
+                bucket.push_back(code)
+        cursor += size
+        last_lb = lb
+        
+
+    return 1
+
+def py_iter_unicode(str text, bint keep_nl=False):
+    cdef:
+        vector[int] bucket
+        int code
+    code = iter_unicode(text.encode('utf-8'), &bucket, keep_nl)
+    if code == -1:
+        raise Exception ("unexpected end of data")
+    elif code == -2:
+        raise Exception ('can\'t decode bytes')
+    return bucket
+
+def test():
+    text = "[]"
+    assert py_iter_unicode(text) == [91, 93], "Failed for `%s` %r"%(text, py_iter_unicode(text))
     
+    text = "我有  嗎"
+    assert py_iter_unicode(text) == [25105, 26377, 21966], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "我有  嗎 ⒉"
+    assert py_iter_unicode(text) == [25105, 26377, 21966, 50, 46], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "我有  嗎 ❿"
+    assert py_iter_unicode(text) == [25105, 26377, 21966, 40, 49, 48, 41], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    
+    
+    text = "[] <s>"
+    assert py_iter_unicode(text) == [91, 93, SPECIAL_TOKEN_CLS], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "[] </s>"
+    assert py_iter_unicode(text) == [91, 93, SPECIAL_TOKEN_SEP], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "[] <mask>"
+    assert py_iter_unicode(text) == [91, 93, SPECIAL_TOKEN_MASK], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "[] <pad>"
+    assert py_iter_unicode(text) == [91, 93, SPECIAL_TOKEN_PAD], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "[] <unk>"
+    assert py_iter_unicode(text) == [91, 93, SPECIAL_TOKEN_UNK], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "[] <nl>"
+    assert py_iter_unicode(text) == [91, 93, SPECIAL_TOKEN_NL], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    
+    
+    text = "[] <s> "
+    assert py_iter_unicode(text) == [91, 93, SPECIAL_TOKEN_CLS], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "[] </s> "
+    assert py_iter_unicode(text) == [91, 93, SPECIAL_TOKEN_SEP], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "[] <mask> "
+    assert py_iter_unicode(text) == [91, 93, SPECIAL_TOKEN_MASK], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "[] <pad> "
+    assert py_iter_unicode(text) == [91, 93, SPECIAL_TOKEN_PAD], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "[] <unk> "
+    assert py_iter_unicode(text) == [91, 93, SPECIAL_TOKEN_UNK], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "[] <nl> "
+    assert py_iter_unicode(text) == [91, 93, SPECIAL_TOKEN_NL   ], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    
+    
+    text = "<s> "
+    assert py_iter_unicode(text) == [SPECIAL_TOKEN_CLS], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "</s> "
+    assert py_iter_unicode(text) == [SPECIAL_TOKEN_SEP], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "<mask> "
+    assert py_iter_unicode(text) == [SPECIAL_TOKEN_MASK], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "<pad> "
+    assert py_iter_unicode(text) == [SPECIAL_TOKEN_PAD], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "<unk> "
+    assert py_iter_unicode(text) == [SPECIAL_TOKEN_UNK], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+    
+    text = "<nl> "
+    assert py_iter_unicode(text) == [SPECIAL_TOKEN_NL], "Failed for `%s` %r"%(text, py_iter_unicode(text))
+test()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 single_words_only = set()
 single_words_any  = set()
-irreguler_exceptions = {}
+irregular_exceptions = {}
 
 
 
@@ -721,44 +1074,12 @@ cdef unordered_map[int, unordered_set[int]] true_no_suffixed_by_of = unordered_m
 cdef unordered_map[int, unordered_set[int]] true_no_suffixed_by_of_roots = unordered_map[int, unordered_set[int]]()
 cdef unordered_map[int, unordered_set[int]] true_no_suffixed_by_of_nonroots = unordered_map[int, unordered_set[int]]()
 
-'''
-cdef bint adjacent_violate(long A_part, long B_part):
-    cdef int A_key = A_part / 9
-    cdef int A_part_merge_mode = (A_part - A_key * 9) / 3
-    cdef int A_part_form = A_part % 3 
 
-    cdef int B_key = B_part / 9
-    cdef int B_part_merge_mode = (B_part - B_key * 9) / 3
-    cdef int B_part_form = B_part % 3 
 
-    cdef bint A_is_root = A_part_form == ROOT
-    
-    A = all_parts_list[A_key]
-    B = all_parts_list[B_key]
-
-    if A_part_merge_mode == MERGE_MODE_SINGLE and B_part_merge_mode == MERGE_MODE_SINGLE:
-        return False
-
-    if B in no_prefixed_by_of and A in no_prefixed_by_of[B]:
-        return True
-
-    if A in only_suffixed_by_of and B not in only_suffixed_by_of[A]:
-        return True
-
-    if A_is_root:
-        if A in no_suffixed_by_of_roots and (B in no_suffixed_by_of_roots[A] or len(no_suffixed_by_of_roots[A]) == 0):
-            return True
-    elif A in no_suffixed_by_of_nonroots and (B in no_suffixed_by_of_nonroots[A] or len(no_suffixed_by_of_nonroots[A]) == 0):
-        return True
-
-    if A in no_suffixed_by_of and B in no_suffixed_by_of[A]:
-        return True
-    return False
-'''
 
 from time import sleep
 
-cdef bint adjacent_violate_c(long A_part, long B_part) nogil:
+cdef bint adjacent_violate_c(int A_part, int B_part) nogil:
     cdef int A = A_part / 9
     cdef int A_part_merge_mode = (A_part - A * 9) / 3
     cdef int A_part_form = A_part % 3 
@@ -884,7 +1205,7 @@ cdef vector[AB] get_morphed_suffixes_merge_suffixes(int min_left = 1):
             if not p:
                 continue
             for s in suffixes:
-                if s not in all_parts: # or s in irreguler_exceptions:
+                if s not in all_parts: # or s in irregular_exceptions:
                     continue
                 if s.endswith(p):
                     A = s
@@ -960,7 +1281,7 @@ cdef vector[AB] get_morphed_roots_merge_suffixes(int min_left = 2):
             if not p:
                 continue
             for s in roots:
-                if s not in all_parts or s in irreguler_exceptions:
+                if s not in all_parts or s in irregular_exceptions:
                     continue
                 if s.endswith(p):
                     A = s
@@ -1237,28 +1558,41 @@ cdef void ensure_bucket(long key):
         trie_values[key] = bucket
         
 
-cdef long get_part(int content, int form, int merge_mode) nogil:
-    return (<long>content*9) + (<long>merge_mode*3) + (<long>form)
+cdef int get_part(int content, int form, int merge_mode) nogil:
+    return (content*9) + (merge_mode*3) + (form)
 
 
 cdef unordered_map[long, vector[Parts]] trie_values
 cdef unordered_map[long, int] prefixes_lengths
 cdef unordered_map[long, int] prefixes_max_part_lengths
 
+cdef unordered_map[int, int] true_part_id_to_vocab_id
 
 cdef unordered_map[int, vector[Parts]] true_trie_values
+cdef unordered_map[int, Parts] part_id_to_irregular_parts
 cdef unordered_map[int, int] true_prefixes_lengths
-cdef unordered_map[int, int] true_prefixes_max_part_lengths
 
 cdef unordered_map[char, int] true_all_alphabets
 
+def convert_part_id_to_vocab_id(int x):
+    if true_part_id_to_vocab_id.find(x) != true_part_id_to_vocab_id.end():
+        return true_part_id_to_vocab_id[x]
+    return -1
+def convert_str_to_trie_id(str x):
+    return trie_obj[x]
 
+
+def convert_trie_id_to_parts(int x):
+    return true_trie_values[x]
+
+    
 
 def gen(bint debug=False):
     global mix_two_morphed_h
     global mix_two_morphed_k
+    global part_id
     cdef vector[Parts]* bucket
-    cdef vector[long] vec_part
+    cdef vector[int] vec_part
     cdef int k, n, i,
     cdef long key, kk
 
@@ -1269,7 +1603,7 @@ def gen(bint debug=False):
         ensure_bucket(key)
         #print('%-20d: %s'%(key, e))
         bucket = &trie_values[key]
-        vec_part = vector[long]()
+        vec_part = vector[int]()
         vec_part.reserve(1)
         kk = get_part(k, 
                     PREFIX, 
@@ -1277,7 +1611,7 @@ def gen(bint debug=False):
                     (MERGE_MODE_SINGLE if e in single_words_only else 
                     MERGE_MODE_NORMAL)
                     )
-        if debug: assert kk in part_id_to_vocab_id or e in irreguler_exceptions, "%s (PREFIX, %s) not found in part_id_to_vocab_id"%(e,         
+        if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "%s (PREFIX, %s) not found in part_id_to_vocab_id"%(e,         
                     'MERGE_MODE_BOTH' if e in single_words_any else 
                     ('MERGE_MODE_SINGLE' if e in single_words_only else 
                     'MERGE_MODE_NORMAL'))
@@ -1285,7 +1619,7 @@ def gen(bint debug=False):
         if debug:
             print('gen >> prefix :: '+e+' [part_id:%s] '%kk )
         vec_part.push_back(kk)
-        bucket.push_back((vec_part, 0, 0, 0))
+        bucket.push_back((vec_part, 0, 0, len(e)))
         prefixes_lengths[key] = prefixes_max_part_lengths[key] = len(e)
         
         assert len(e) > 0
@@ -1301,7 +1635,7 @@ def gen(bint debug=False):
         key = hash_string(e)
         ensure_bucket(key)
         bucket = &trie_values[key]
-        vec_part = vector[long]()
+        vec_part = vector[int]()
         vec_part.reserve(1)
         kk = get_part(k, 
                     ROOT, 
@@ -1309,7 +1643,7 @@ def gen(bint debug=False):
                     (MERGE_MODE_SINGLE if e in single_words_only else 
                     MERGE_MODE_NORMAL)
                     )
-        if debug: assert kk in part_id_to_vocab_id or e in irreguler_exceptions, "%s: %s (ROOT, %s) not found in part_id_to_vocab_id"%(kk, e,         
+        if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "%s: %s (ROOT, %s) not found in part_id_to_vocab_id"%(kk, e,         
                     'MERGE_MODE_BOTH' if e in single_words_any else 
                     ('MERGE_MODE_SINGLE' if e in single_words_only else 
                     'MERGE_MODE_NORMAL'))
@@ -1317,7 +1651,7 @@ def gen(bint debug=False):
         if debug:
             print('gen >> roots  :: '+e+' [part_id:%s] '%kk )
         vec_part.push_back(kk)
-        bucket.push_back((vec_part, -ROOT_PUNISHMENT, 0, 0))
+        bucket.push_back((vec_part, -ROOT_PUNISHMENT, 0, len(e)))
         prefixes_lengths[key] = prefixes_max_part_lengths[key] = len(e)
         assert len(e) > 0
         assert trie_values[key].size() > 0
@@ -1329,7 +1663,7 @@ def gen(bint debug=False):
         key = hash_string(e)
         ensure_bucket(key)
         bucket = &trie_values[key]
-        vec_part = vector[long]()
+        vec_part = vector[int]()
         vec_part.reserve(1)
         
         kk = get_part(k, 
@@ -1338,7 +1672,7 @@ def gen(bint debug=False):
                     (MERGE_MODE_SINGLE if e in single_words_only else 
                     MERGE_MODE_NORMAL)
                     )
-        if debug: assert kk in part_id_to_vocab_id or e in irreguler_exceptions, "%s (SUFFIX, %s) not found in part_id_to_vocab_id"%(e,         
+        if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "%s (SUFFIX, %s) not found in part_id_to_vocab_id"%(e,         
                     'MERGE_MODE_BOTH' if e in single_words_any else 
                     ('MERGE_MODE_SINGLE' if e in single_words_only else 
                     'MERGE_MODE_NORMAL'))
@@ -1346,12 +1680,49 @@ def gen(bint debug=False):
         if debug:
             print('gen >> suffix  :: '+e+' [part_id:%s] '%kk )
         vec_part.push_back(kk)
-        bucket.push_back((vec_part, 0, 0, 0))
+        bucket.push_back((vec_part, 0, 0, len(e)))
         prefixes_lengths[key] = prefixes_max_part_lengths[key] = len(e)
         assert len(e) > 0
         assert trie_values[key].size() > 0
         yield e.encode('utf-8')
         
+
+    print('Loading irregular_exceptions')
+    for e in irregular_exceptions:
+        #print('irregular_exceptions: %s'%e)
+        if e in all_parts:
+            continue
+
+        part_id += 1
+        k = all_parts[e] = part_id
+        all_parts_list.append(e)
+        key = hash_string(e)
+        ensure_bucket(key)
+        bucket = &trie_values[key]
+        vec_part = vector[int]()
+        vec_part.reserve(1)
+        kk = get_part(k, 
+                    ROOT, 
+                    MERGE_MODE_BOTH if e in single_words_any else 
+                    (MERGE_MODE_SINGLE if e in single_words_only else 
+                    MERGE_MODE_NORMAL)
+                    )
+        if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "%s: %s (ROOT, %s) not found in part_id_to_vocab_id"%(kk, e,         
+                    'MERGE_MODE_BOTH' if e in single_words_any else 
+                    ('MERGE_MODE_SINGLE' if e in single_words_only else 
+                    'MERGE_MODE_NORMAL'))
+        
+        if debug:
+            print('gen >> roots  :: '+e+' [part_id:%s] '%kk )
+        vec_part.push_back(kk)
+        bucket.push_back((vec_part, -ROOT_PUNISHMENT, 0, len(e)))
+        prefixes_lengths[key] = prefixes_max_part_lengths[key] = len(e)
+        assert len(e) > 0
+        assert trie_values[key].size() > 0
+        yield e.encode('utf-8')
+            
+
+
     print('Loading morphed_suffixes_merge_suffixes')
     get_morphed_suffixes_merge_suffixes()
     print('Loaded morphed_roots_merge_suffixes (%d)'%morphed_suffixes_merge_suffixes.size())
@@ -1369,16 +1740,16 @@ def gen(bint debug=False):
         ensure_bucket(ret.key)
         bucket = &trie_values[ret.key]
         
-        vec_part = vector[long]()
+        vec_part = vector[int]()
         vec_part.reserve(2)
         kk = get_part(ret.A, SUFFIX, ret.A_merge_mode)
-        if debug: assert kk in part_id_to_vocab_id or e in irreguler_exceptions, "SS AB 1: %r"%ret
+        if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "SS AB 1: %r"%ret
         kk = get_part(ret.B, SUFFIX, ret.B_merge_mode)
-        if debug: assert kk in part_id_to_vocab_id or e in irreguler_exceptions, "SS AB 2: %r"%ret
+        if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "SS AB 2: %r"%ret
 
         vec_part.push_back(get_part(ret.A, SUFFIX, ret.A_merge_mode))
         vec_part.push_back(get_part(ret.B, SUFFIX, ret.B_merge_mode))
-        bucket.push_back((vec_part, ret.score - 1, 0, 0))
+        bucket.push_back((vec_part, ret.score - 1, 0, ret.longest_length))
         prefixes_max_part_lengths[ret.key] = ret.longest_length
         prefixes_lengths[ret.key] = ret.morphed_length
         yield (<bytes>ret.morphed)
@@ -1390,15 +1761,15 @@ def gen(bint debug=False):
         bucket = &trie_values[ret.key]
 
         kk = get_part(ret.A, ROOT, ret.A_merge_mode)
-        if debug: assert kk in part_id_to_vocab_id or e in irreguler_exceptions, "RS AB 1: %r"%ret
+        if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "RS AB 1: %r"%ret
         kk = get_part(ret.B, SUFFIX, ret.B_merge_mode)
-        if debug: assert kk in part_id_to_vocab_id or e in irreguler_exceptions, "RS AB 2: %r"%ret
+        if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "RS AB 2: %r"%ret
         
-        vec_part = vector[long]()
+        vec_part = vector[int]()
         vec_part.reserve(2)
         vec_part.push_back(get_part(ret.A, ROOT, ret.A_merge_mode))
         vec_part.push_back(get_part(ret.B, SUFFIX, ret.B_merge_mode))
-        bucket.push_back((vec_part, ret.score-ROOT_PUNISHMENT - 1, 0, 0))
+        bucket.push_back((vec_part, ret.score-ROOT_PUNISHMENT - 1, 0, ret.longest_length))
         
         prefixes_max_part_lengths[ret.key] = ret.longest_length
         prefixes_lengths[ret.key] = ret.morphed_length
@@ -1421,12 +1792,12 @@ def gen(bint debug=False):
         if debug: assert kk in part_id_to_vocab_id, "SSS ABC 3: %r"%ret2
 
 
-        vec_part = vector[long]()
+        vec_part = vector[int]()
         vec_part.reserve(3)
         vec_part.push_back(get_part(ret2.A, SUFFIX, ret2.A_merge_mode))
         vec_part.push_back(get_part(ret2.B, SUFFIX, ret2.B_merge_mode))
         vec_part.push_back(get_part(ret2.C, SUFFIX, ret2.C_merge_mode))
-        bucket.push_back((vec_part, ret2.score - 2, 0, 0))
+        bucket.push_back((vec_part, ret2.score - 2, 0, ret2.longest_length))
 
         prefixes_max_part_lengths[ret2.key] = ret2.longest_length
         prefixes_lengths[ret2.key] = ret2.morphed_length
@@ -1443,19 +1814,19 @@ def gen(bint debug=False):
         bucket = &trie_values[ret2.key]
 
         kk = get_part(ret2.A, ROOT, ret2.A_merge_mode)
-        # assert kk in part_id_to_vocab_id or e in irreguler_exceptions, "RSS ABC 1: %r"%ret2
+        if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "RSS ABC 1: %r"%ret2
         kk = get_part(ret2.B, SUFFIX, ret2.B_merge_mode)
-        # assert kk in part_id_to_vocab_id or e in irreguler_exceptions, "RSS ABC 2: %r"%ret2
+        if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "RSS ABC 2: %r"%ret2
         kk = get_part(ret2.C, SUFFIX, ret2.C_merge_mode)
-        # assert kk in part_id_to_vocab_id or e in irreguler_exceptions, "RSS ABC 3: %r"%ret2
+        if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "RSS ABC 3: %r"%ret2
 
 
-        vec_part = vector[long]()
+        vec_part = vector[int]()
         vec_part.reserve(3)
         vec_part.push_back(get_part(ret2.A, ROOT, ret2.A_merge_mode))
         vec_part.push_back(get_part(ret2.B, SUFFIX, ret2.B_merge_mode))
         vec_part.push_back(get_part(ret2.C, SUFFIX, ret2.C_merge_mode))
-        bucket.push_back((vec_part, ret2.score-ROOT_PUNISHMENT - 2, 0, 0))
+        bucket.push_back((vec_part, ret2.score-ROOT_PUNISHMENT - 2, 0, ret2.longest_length))
         
         prefixes_max_part_lengths[ret2.key] = ret2.longest_length
         prefixes_lengths[ret2.key] = ret2.morphed_length
@@ -1533,8 +1904,8 @@ def load_data(alphabets = "abcdefghijklmnopqrstuvwxyz", debug=False):
                 continue
 
             single_words_only.add(line)
-    with open(get_file('irreguler_exceptions.json')) as f:
-        irreguler_exceptions.update(json.load(f))
+    with open(get_file('irregular_exceptions.json')) as f:
+        irregular_exceptions.update(json.load(f))
 
 
     with open(get_file('words2.txt')) as f:
@@ -1551,7 +1922,7 @@ def load_data(alphabets = "abcdefghijklmnopqrstuvwxyz", debug=False):
             token_id = 0
             
             for e in a.split(','):
-                if e in irreguler_exceptions:
+                if e in irregular_exceptions:
                     if len(a.split(',')) != 1:
                         raise
                     # this will be decoded like normal token, but decomposed later
@@ -1692,15 +2063,142 @@ def load_data(alphabets = "abcdefghijklmnopqrstuvwxyz", debug=False):
 
 
 
+def make_irregular():
+    cdef:
+        str part, k
+        bytes b_part
+        int trie_id, part_id, i, m
+        vector[Parts] repl, repl_combined, repl_combined_temp
+        int len_contents
+        Parts *temp_parts
+        Parts parts
+        float score, new_score, cmp_max_score
+        vector[int] contents, new_contents
+        vector[int]* temp_contents
+        bint has_root
+        int A_part, B_part
+        int temp_parts_length
+        int A_part_form, B_part_form
+        int len_p_part_max, len_part_max, len_v, part_index
+
+
+    for k, v in irregular_exceptions.items():
+        part_id = get_part(all_parts[k],
+                    ROOT, 
+                    MERGE_MODE_BOTH if k in single_words_any else 
+                    (MERGE_MODE_SINGLE if k in single_words_only else 
+                    MERGE_MODE_NORMAL)
+                    )
+        repl_combined = vector[Parts]()
+        len_v = len(v)
+        part_index = 0
+        if not v:
+            continue
+        for part in v:  
+            part_index += 1
+            try:
+                trie_id = trie_obj[part]
+                assert trie_id < true_trie_values.size(), 'true_trie_values size ? %s'%((k, v),)
+                repl = true_trie_values[trie_id]
+            except:
+                repl = vector[Parts]()
+                b_part = part.encode('utf8')
+                _tokenize_word_to_parts(<char*>b_part, len(b_part), &repl, MIN_SCORE_RATIO, False)
+                
+            if repl_combined.size() == 0:
+                for i in range(repl.size()):
+                    repl_combined.push_back(repl[i])
+            else:
+                repl_combined_temp = vector[Parts]()
+                for i in range(repl_combined.size()):
+                    contents = repl_combined[i][0]
+                    score = repl_combined[i][1]
+                    len_contents = contents.size()
+                    len_part_max = repl_combined[i][3]
+                    for m in range(repl.size()):
+                        temp_parts = &(repl[m])
+                        temp_contents = &(temp_parts[0][0])
+                        temp_parts_length = temp_contents.size()
+                        
+                        len_p_part_max = len_part_max if len_part_max > temp_parts[0][3] else temp_parts[0][3]
+
+                        new_contents = vector[int]()
+                        new_contents.reserve(len_contents+temp_parts_length)
+                        for j in range(len_contents):
+                            new_contents.push_back(contents[j])
+                        for j in range(temp_parts_length):
+                            new_contents.push_back(temp_contents[0][j])
+                        
+                        new_score = score + temp_parts[0][1] - 1
+
+                        if part_index == len_v:
+                            # Prefer splits that have a root
+                            # if no root, punish! 
+                            has_root = False
+                            for m in range(len_contents+temp_parts_length):
+                                A_part = new_contents[m]
+                                A_part_form = A_part % 3
+                                if A_part_form == ROOT:
+                                    has_root = True
+                                    break
+
+                            if not has_root:
+                                new_score -= 1
+                                
+                            # ends with prefix and start with suffix is not good
+                            for m from len_contents+temp_parts_length-1 >= m >= 0: 
+                                A_part = new_contents[m]
+                                A_part_form = A_part % 3
+                                if A_part_form == PREFIX:
+                                    new_score -= 1
+                                    break
+                                elif A_part_form == SUFFIX:
+                                    continue
+                                break
+
+                            for m in range(len_contents+temp_parts_length):
+                                A_part = new_contents[m]
+                                A_part_form = A_part % 3
+                                if A_part_form == SUFFIX:
+                                    new_score -= 1
+                                    break
+                                elif A_part_form == PREFIX:
+                                    continue
+                                break
+                              
+
+                        repl_combined_temp.push_back(
+                            (new_contents, 
+                            new_score, 
+                            temp_parts[0][2], 
+                            len_p_part_max)) 
+
+
+                repl_combined = repl_combined_temp
+            
+            
+        i = 0
+        cmp_max_score = -100
+        assert repl_combined.size() > 0, 'repl_combined size ? %s'%((k, v),)
+
+        for j in range(repl_combined.size()):
+            score = <float>repl_combined[j][1] + (<float>repl_combined[j][3] / 1000)
+            if score > cmp_max_score:
+                cmp_max_score = score
+                i = j
+                
+        part_id_to_irregular_parts[part_id] = repl_combined[i]
+
+
 
 def true_trie_values_to_np():
     cdef unordered_map[int, vector[Parts]].iterator it = true_trie_values.begin()
     cdef unordered_map[int, vector[Parts]].iterator end = true_trie_values.end()
         
-    cdef Py_ssize_t key, i, j, size, size2
+    cdef int key, i, j, size, size2
     cdef vector[Parts] vector_parts
     cdef Parts parts
-    cdef long part
+    cdef int part
     cdef vector[np.int32_t] buffer
     buffer.reserve(2**30)
 
@@ -1727,15 +2225,49 @@ def true_trie_values_to_np():
                 
 
             buffer.push_back(<int>(parts[1]*100))
+            buffer.push_back(parts[3])
             buffer.push_back(size2)
 
             for j in range(size2):
                 part = parts[0][j]
-                assert part in part_id_to_vocab_id or all_parts_list[int(part/9) - 1] in irreguler_exceptions, "part not in part_id_to_vocab_id (%s) [%s]"%(all_parts_list[int(part/9) - 1], int(part) )
+                assert part in part_id_to_vocab_id or all_parts_list[int(part/9) - 1] in irregular_exceptions, "part not in part_id_to_vocab_id (%s) [%s]"%(all_parts_list[int(part/9) - 1], int(part) )
 
                 buffer.push_back(part)
 
         inc(it)
+
+    cdef unordered_map[int, Parts].iterator it1 = part_id_to_irregular_parts.begin()
+    cdef unordered_map[int, Parts].iterator end1 = part_id_to_irregular_parts.end()
+
+    buffer.push_back(part_id_to_irregular_parts.size())
+    while it1 != end1:
+        key = deref(it1).first
+        parts = deref(it1).second
+
+        buffer.push_back(key)
+
+        size2 = parts[0].size()
+        assert size2 > 0, "% zero size (:2)"%key
+
+        if size2 == 1 and parts[0][0]%3 == ROOT:
+            assert parts[1] < 0
+
+        buffer.push_back(<int>(parts[1]*100))
+        buffer.push_back(parts[3])
+        buffer.push_back(size2)
+
+        for j in range(size2):
+            part = parts[0][j]
+            assert part in part_id_to_vocab_id or all_parts_list[int(part/9) - 1] in irregular_exceptions, "part not in part_id_to_vocab_id (%s) [%s]"%(all_parts_list[int(part/9) - 1], int(part) )
+
+            buffer.push_back(part)
+
+
+        inc(it1)
+
+
+
+
 
     cdef unordered_map[int, vector[Parts]].iterator it2
     cdef unordered_map[int, vector[Parts]].iterator end2
@@ -1781,21 +2313,24 @@ def true_trie_values_to_np():
 
         inc(it3)
 
-    cdef unordered_map[int, int].iterator it4 = true_prefixes_max_part_lengths.begin()
-    cdef unordered_map[int, int].iterator end4 = true_prefixes_max_part_lengths.end()
 
-    buffer.push_back(true_prefixes_max_part_lengths.size())
 
-    while it4 != end4:
-        trie_id = deref(it4).first
-        length = deref(it4).second
+    cdef unordered_map[int, int].iterator it5 = true_part_id_to_vocab_id.begin()
+    cdef unordered_map[int, int].iterator end5 = true_part_id_to_vocab_id.end()
+
+    buffer.push_back(true_part_id_to_vocab_id.size())
+
+    while it5 != end5:
+        trie_id = deref(it5).first
+        length = deref(it5).second
 
         buffer.push_back(trie_id)
         buffer.push_back(length)
 
-        inc(it4)
+        inc(it5)
 
 
+        
     buffer.push_back(len(all_alphabets))
     for ch in all_alphabets:
         buffer.push_back(<int>ord(ch))
@@ -1811,7 +2346,7 @@ import zlib
 cdef Trie trie_obj = Trie()
 
 def generate_trie(str path, str name, bint debug=False):
-    global stay_alive
+    global stay_alive, trie_obj
     cdef int i 
 
     load_data(debug=debug) 
@@ -1819,14 +2354,14 @@ def generate_trie(str path, str name, bint debug=False):
     cdef int trie_id
     cdef long key
 
-    trie = Trie(gen(debug=debug))
+    trie_obj = Trie(gen(debug=debug))
     
     for i in range(<int>stay_alive.size()):
         free(stay_alive[i])
 
-    trie.save(os.path.join(path, name+'.trie'))
+    trie_obj.save(os.path.join(path, name+'.trie'))
 
-    cdef unordered_map[long, int] temp_mapping
+    cdef unordered_map[int, int] temp_mapping
 
     cdef unordered_map[long, vector[Parts]].iterator it = trie_values.begin()
     cdef unordered_map[long, vector[Parts]].iterator end = trie_values.end()
@@ -1842,9 +2377,9 @@ def generate_trie(str path, str name, bint debug=False):
 
 
 
-    for e in trie:
+    for e in trie_obj:
         key = hash_string(e.decode())
-        trie_id = trie[e.decode()]
+        trie_id = trie_obj[e.decode()]
 
         temp_mapping[key] = trie_id
         
@@ -1857,7 +2392,6 @@ def generate_trie(str path, str name, bint debug=False):
 
     cdef unordered_map[long, int].iterator it2 = prefixes_lengths.begin()
     cdef unordered_map[long, int].iterator end2 = prefixes_lengths.end()
-    cdef long hashed_key
     cdef int length
     while it2 != end2:
         key = deref(it2).first
@@ -1866,19 +2400,12 @@ def generate_trie(str path, str name, bint debug=False):
 
         inc(it2)
 
-    cdef unordered_map[long, int].iterator it3 = prefixes_max_part_lengths.begin()
-    cdef unordered_map[long, int].iterator end3 = prefixes_max_part_lengths.end()
-    while it3 != end3:
-        key = deref(it3).first
-        length = deref(it3).second
-        true_prefixes_max_part_lengths[temp_mapping[key]] = length
-
-        inc(it3)
 
 
+    for key, v in part_id_to_vocab_id.items():
+        true_part_id_to_vocab_id[key] = v
 
-
-        
+    make_irregular()
 
     data = true_trie_values_to_np()
 
@@ -1911,9 +2438,9 @@ def load(str path, str name, bint profile=False, bint debug=False):
     openmp.omp_set_lock(&lock)
     cdef unordered_set[int] mapping
     cdef vector[Parts] vector_parts
-    cdef vector[long] vector_part
+    cdef vector[int] vector_part
     cdef Parts parts
-    cdef long part
+    cdef int part
     cdef np.ndarray[np.int32_t, ndim=1] data
     cdef np.int32_t[::1] view 
     cdef double t0, t1
@@ -1949,8 +2476,9 @@ def load(str path, str name, bint profile=False, bint debug=False):
     cdef int trie_id, i, j, size, size2, part_id
     cdef float score
     cdef long k = 1, max_length = data.shape[0]
-    cdef int true_trie_values_size = data[0]
+    cdef int true_trie_values_size = data[0], len_part_max
 
+    
     while k < max_length and <int>true_trie_values.size() < true_trie_values_size:
         trie_id = data[k]
         k += 1
@@ -1961,21 +2489,20 @@ def load(str path, str name, bint profile=False, bint debug=False):
         vector_parts.reserve(size)
 
         for i in range(size):
-            score = (<float>data[k]) / 100
-            k += 1
-            size2 = data[k]
-            k += 1
+            score = (<float>data[k]) / 100; k += 1
+            len_part_max = data[k]; k += 1
+            size2 = data[k]; k += 1
             
-            vector_part = vector[long]()
+            vector_part = vector[int]()
             vector_part.reserve(size2)
             for j in range(size2):
                 vector_part.push_back(data[k]) 
                 k += 1
                 
-            if debug:
-                print(' '.join((all_parts_list[e//9-1]+' (%s)'%(FORMS[e%3])   ) for e in vector_part) +  'score: %s'%( score))
+            #if debug:
+            #    print(' '.join((all_parts_list[e//9-1]+' (%s)'%(FORMS[e%3])   ) for e in vector_part) +  'score: %s'%( score))
             
-            parts = (vector_part, score, 0, 0)
+            parts = (vector_part, score, 0, len_part_max)
         
             vector_parts.push_back(parts)
         
@@ -1983,9 +2510,35 @@ def load(str path, str name, bint profile=False, bint debug=False):
         
     assert true_trie_values_size == <int>true_trie_values.size(), "true_trie_values size mismatch. Got %s, should be %s"%(true_trie_values.size(), true_trie_values_size)
         
-    #print('true_trie_values:', true_trie_values.size() )
+    print('true_trie_values:', true_trie_values.size() )
+    
+    size = data[k]; k += 1
+    for i in range(size):
+        part_id = data[k]; k += 1
         
+        score = (<float>data[k]) / 100; k += 1
+        len_part_max = data[k]; k += 1
+        size2 = data[k]; k += 1
+        
+        vector_part = vector[int]()
+        vector_part.reserve(size2)
+        for j in range(size2):
+            vector_part.push_back(data[k]) 
+            k += 1
+            
+        
+        parts = (vector_part, score, 0, len_part_max)
+        part_id_to_irregular_parts[part_id] = parts
 
+    assert size == <int>part_id_to_irregular_parts.size(), "part_id_to_irregular_parts size mismatch. Got %s, should be %s"%(part_id_to_irregular_parts.size(), size)
+
+    print('part_id_to_irregular_parts:', part_id_to_irregular_parts.size() )
+    print(part_id_to_irregular_parts)
+
+
+
+
+        
     size = data[k]; k += 1
     for i in range(size):
         part_id = data[k]; k += 1
@@ -1998,7 +2551,7 @@ def load(str path, str name, bint profile=False, bint debug=False):
         
     assert size == <int>true_no_prefixed_by_of.size(), \
         "true_no_prefixed_by_of size mismatch. Got %s, should be %s"%(true_no_prefixed_by_of.size(), size)
-    #print('true_no_prefixed_by_of:', true_no_prefixed_by_of.size() )
+    print('true_no_prefixed_by_of:', true_no_prefixed_by_of.size() )
         
         
     size = data[k]; k += 1
@@ -2013,7 +2566,7 @@ def load(str path, str name, bint profile=False, bint debug=False):
     
     assert size == <int>true_only_suffixed_by_of.size(), \
         "true_only_suffixed_by_of size mismatch. Got %s, should be %s"%(true_only_suffixed_by_of.size(), size)
-    #print('true_only_suffixed_by_of:', true_only_suffixed_by_of.size() )
+    print('true_only_suffixed_by_of:', true_only_suffixed_by_of.size() )
         
     size = data[k]; k += 1
     for i in range(size):
@@ -2027,7 +2580,7 @@ def load(str path, str name, bint profile=False, bint debug=False):
     
     assert size == <int>true_no_suffixed_by_of_roots.size(), \
         "true_no_suffixed_by_of_roots size mismatch. Got %s, should be %s"%(true_no_suffixed_by_of_roots.size(), size)
-    #print('true_no_suffixed_by_of_roots:', true_no_suffixed_by_of_roots.size() )
+    print('true_no_suffixed_by_of_roots:', true_no_suffixed_by_of_roots.size() )
         
         
     size = data[k]; k += 1
@@ -2042,7 +2595,7 @@ def load(str path, str name, bint profile=False, bint debug=False):
     
     assert size == <int>true_no_suffixed_by_of_nonroots.size(), \
         "true_no_suffixed_by_of_nonroots size mismatch. Got %s, should be %s"%(true_no_suffixed_by_of_nonroots.size(), size)
-    #print('true_no_suffixed_by_of_nonroots:', true_no_suffixed_by_of_nonroots.size() )
+    print('true_no_suffixed_by_of_nonroots:', true_no_suffixed_by_of_nonroots.size() )
         
         
     size = data[k]; k += 1
@@ -2057,7 +2610,7 @@ def load(str path, str name, bint profile=False, bint debug=False):
     
     assert size == <int>true_no_suffixed_by_of.size(), \
         "true_no_suffixed_by_of size mismatch. Got %s, should be %s"%(true_no_suffixed_by_of.size(), size)
-    #print('true_no_suffixed_by_of:', true_no_suffixed_by_of.size() )
+    print('true_no_suffixed_by_of:', true_no_suffixed_by_of.size() )
     
     
     
@@ -2069,20 +2622,18 @@ def load(str path, str name, bint profile=False, bint debug=False):
     assert size == <int>true_prefixes_lengths.size(), \
         "true_prefixes_lengths size mismatch. Got %s, should be %s"%(true_prefixes_lengths.size(), size)
     
+    print('true_prefixes_lengths:', true_prefixes_lengths.size() )
 
 
     size = data[k]; k += 1
     for i in range(size):
         part_id = data[k]; k += 1
-        true_prefixes_max_part_lengths[part_id] = data[k]; k += 1
+        true_part_id_to_vocab_id[part_id] = data[k]; k += 1
     
-    assert size == <int>true_prefixes_max_part_lengths.size(), \
-        "true_prefixes_lengths size mismatch. Got %s, should be %s"%(true_prefixes_max_part_lengths.size(), size)
+    assert size == <int>true_part_id_to_vocab_id.size(), \
+        "true_part_id_to_vocab_id size mismatch. Got %s, should be %s"%(true_part_id_to_vocab_id.size(), size)
     
-
-
-    
-    #print('true_prefixes_lengths:', true_prefixes_lengths.size() )
+    print('true_part_id_to_vocab_id:', true_part_id_to_vocab_id.size() )
 
     size = data[k]; k += 1
     for i in range(size):
@@ -2140,9 +2691,11 @@ def load(str path, str name, bint profile=False, bint debug=False):
 
 
 
-MIN_SCORE_RATIO = 1.25
+cdef float MIN_SCORE_RATIO = 1.25
 
-cdef int tokenize_word_auto(char* chars, int length, vector[long]* result_contents):
+                
+
+cdef int tokenize_word_auto(char* chars, int length, vector[int]* result_contents):
     cdef int max_call_depth 
 
     if length > 16:
@@ -2177,8 +2730,8 @@ def tokenize_word(str word, int max_call_depth = 3, float min_score_ratio = 1.5,
     if return_candidates:
         return _tokenize_word_candidates(<char *>b_word, length, max_call_depth, min_score_ratio, debug)
 
-    cdef vector[long] result_contents = vector[long]()
-
+    cdef vector[int] result_contents = vector[int]()
+    result_contents.reserve(8)
     _tokenize_word(<char *>b_word, length, &result_contents, max_call_depth, min_score_ratio, debug)
 
     return result_contents
@@ -2189,7 +2742,7 @@ cdef vector[Parts] _tokenize_word_candidates(char* chars, int length, int max_ca
         int i = 0, j = 0
         int cursor = 0, size, result_contents_size
         vector[vector[Parts]] cache = vector[vector[Parts]]()
-        vector[long] contents = vector[long](), result_contents = vector[long]()
+        vector[int] contents = vector[int](), result_contents = vector[int]()
         Parts parts
         int call_depth = 0
         float max_score = -100
@@ -2228,7 +2781,7 @@ cdef vector[Parts] _tokenize_word_candidates(char* chars, int length, int max_ca
 
         result_contents.insert(result_contents.end(),results[i][0].begin(),results[i][0].end() - 1)
 
-        contents = vector[long]()
+        contents = vector[int]()
         contents.push_back(results[i][0][results[i][0].size() - 1])
 
         first = False
@@ -2254,12 +2807,49 @@ cdef vector[Parts] _tokenize_word_candidates(char* chars, int length, int max_ca
 
     return results
 
-cdef int _tokenize_word(char* chars, int length, vector[long]* result_contents, int max_call_depth, float min_score_ratio, bint debug) nogil:
+
+cdef Parts _tokenize_word_to_parts(char* chars, int length, vector[Parts]* results, float min_score_ratio, bint debug) nogil:
     cdef:
         int i = 0, j = 0
         int cursor = 0, size
         vector[vector[Parts]] cache = vector[vector[Parts]]()
-        vector[long] contents = vector[long]()
+        vector[int] contents = vector[int]()
+        Parts parts
+        int call_depth = 0
+        float max_score = -100
+        float cmp_max_score , score
+
+    for i in range(length+1):
+        cache.push_back(vector[Parts]())
+
+    parts = (contents, 0, 0, 0)
+    
+    results.reserve(1024)
+    tokenize_inner(chars, cursor, length, parts, &cache, 100, &max_score, min_score_ratio, call_depth, results)
+
+    i = 0
+    cmp_max_score = -100
+
+    for j in range(results.size()):
+        if results[0][j][2] == length:
+            score = <float>results[0][j][1] + (<float>results[0][j][3] / 1000)
+            if score > cmp_max_score:
+                cmp_max_score = score
+                i = j
+    if results.size() == 0:
+        with gil:
+            print("%s failed to be tokenized"%chars)
+        return parts
+    return results[0][i]
+
+
+
+cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, int max_call_depth, float min_score_ratio, bint debug) nogil:
+    cdef:
+        int i = 0, j = 0
+        int cursor = 0, size
+        vector[vector[Parts]] cache = vector[vector[Parts]]()
+        vector[int] contents = vector[int]()
         Parts parts
         int call_depth = 0
         float max_score = -100
@@ -2267,7 +2857,6 @@ cdef int _tokenize_word(char* chars, int length, vector[long]* result_contents, 
         float cmp_max_score , score
         vector[Parts] results
 
-    result_contents.reserve(8)
     for i in range(length+1):
         cache.push_back(vector[Parts]())
     
@@ -2287,7 +2876,7 @@ cdef int _tokenize_word(char* chars, int length, vector[long]* result_contents, 
             if results[j][2] == length:
                 cont = False
                 break
-            score = results[j][1]
+            score = <float>results[j][1] + (<float>results[j][3] / 1000) + results[j][0].size()
             if score > cmp_max_score:
                 cmp_max_score = score
                 i = j
@@ -2297,7 +2886,7 @@ cdef int _tokenize_word(char* chars, int length, vector[long]* result_contents, 
 
         result_contents.insert(result_contents.end(),results[i][0].begin(),results[i][0].end() - 1)
 
-        contents = vector[long]()
+        contents = vector[int]()
         contents.push_back(results[i][0][results[i][0].size() - 1])
         
         cursor = results[i][2]
@@ -2336,9 +2925,10 @@ cdef void tokenize_inner(
     vector[Parts]* returns) nogil:
 
     cdef:
-        vector[long] contents = parts[0]
-        vector[long] new_contents
-        vector[long]* temp_contents
+        vector[int] contents = parts[0]
+        vector[int] new_contents
+        vector[int]* temp_contents
+        vector[int]* contents_tmp
         float score = parts[1]
         float new_score 
         int len_contents = contents.size()
@@ -2348,7 +2938,7 @@ cdef void tokenize_inner(
         int cache_length
         Parts *temp_parts
         Parts  new_parts
-        long A_part, B_part
+        int A_part, B_part
         int temp_parts_length
         int i, j, k, m, n, p, _cursor, repeated, A_part_form, B_part_form
         vector[int] prefixes_ids
@@ -2384,7 +2974,7 @@ cdef void tokenize_inner(
             #if len_contents+temp_parts_length > max_call_depth:
             #    continue
 
-            new_contents = vector[long]()
+            new_contents = vector[int]()
             new_contents.reserve(len_contents+temp_parts_length)
             for j in range(len_contents):
                 new_contents.push_back(contents[j])
@@ -2443,11 +3033,10 @@ cdef void tokenize_inner(
             p = prefixes_ids[i]
             # assert true_prefixes_lengths.find(p) != true_prefixes_lengths.end(), "A: true_prefixes_lengths.find(p) != true_prefixes_lengths.end()"
             len_p = true_prefixes_lengths[p]
-            len_p_part_max = true_prefixes_max_part_lengths[p]
+            
             matched = True
             true_trie_value = &true_trie_values[p]
 
-            len_p_part_max = len_part_max if len_part_max > len_p_part_max else len_p_part_max
 
 
             # iterate the possible parts
@@ -2457,6 +3046,8 @@ cdef void tokenize_inner(
                 temp_parts = &(true_trie_value[0][j])
                 temp_contents = &(temp_parts[0][0])
                 temp_parts_length = temp_contents.size()
+                
+                len_p_part_max = len_part_max if len_part_max > temp_parts[0][3] else temp_parts[0][3]
                 
                 # assert temp_parts_length > 0, "B: assert temp_parts_length > 0"
 
@@ -2491,25 +3082,41 @@ cdef void tokenize_inner(
                             else:
                                 print(' '*call_depth + '** split ends (reach max depth) **')
 
-                    new_contents = vector[long]()
-                    new_contents.reserve(len_contents+temp_parts_length)
-                    for j in range(len_contents):
-                        new_contents.push_back(contents[j])
-                    for j in range(temp_parts_length):
-                        new_contents.push_back(temp_contents[0][j])
-                    
-                    new_score = score + temp_parts[0][1]
-                    IF DEBUG:
-                        with gil:
-                            print(' '*call_depth + 'score: %.1f + %.1f = %.1f'%(score, temp_parts[0][1], new_score))
-                    if len_contents > 0:
-                        new_score -= 1
-                        IF DEBUG:
-                            with gil:
-                                print(' '*call_depth + 'score: %.1f (len_contents > 0)'%(new_score))
+                    new_contents = vector[int]()
+                    if call_depth != 0:
+                        new_contents.reserve(len_contents+temp_parts_length)
+                        for j in range(len_contents):
+                            new_contents.push_back(contents[j])
+                        for j in range(temp_parts_length):
+                            new_contents.push_back(temp_contents[0][j])
 
-                    # The final split here
-                    if call_depth == 0:
+                        new_score = score + temp_parts[0][1]
+                        if len_contents > 0:
+                            new_score -= 1
+
+                    else:
+                        # The final split here
+                        new_contents.reserve(len_contents+temp_parts_length+4)
+                        for j in range(len_contents):
+                            if part_id_to_irregular_parts.find(contents[j]) == part_id_to_irregular_parts.end():
+                                new_contents.push_back(contents[j])
+                            else:
+                                contents_tmp = &(part_id_to_irregular_parts[contents[j]][0])
+                                for k in range(contents_tmp.size()):
+                                    new_contents.push_back(contents_tmp[0][k])
+
+                        for j in range(temp_parts_length):
+                            if part_id_to_irregular_parts.find(temp_contents[0][j]) == part_id_to_irregular_parts.end():
+                                new_contents.push_back(temp_contents[0][j])
+                            else:
+                                contents_tmp = &(part_id_to_irregular_parts[temp_contents[0][j]][0])
+                                for k in range(contents_tmp.size()):
+                                    new_contents.push_back(contents_tmp[0][k])
+
+                        new_score = score + temp_parts[0][1]
+                        if len_contents > 0:
+                            new_score -= 1
+
                         # Prefer splits that have a root
                         # if no root, punish! 
                         IF DEBUG:
@@ -2614,25 +3221,48 @@ cdef void tokenize_inner(
                                 (temp_parts[0][0], temp_parts[0][1], temp_parts[0][2], temp_parts[0][3] if temp_parts[0][3] > len_p_part_max else len_p_part_max)
                                 )
 
-                            new_contents = vector[long]()
-                            new_contents.reserve(len_contents+temp_parts_length)
-                            for m in range(len_contents):
-                                new_contents.push_back(contents[m])
-                            for m in range(temp_parts_length):
-                                new_contents.push_back(temp_contents[0][m])
-                            
-                            new_score = score + temp_parts[0][1]
-                            IF DEBUG:
-                                with gil:
-                                    print(' '*call_depth + 'score: %.1f + %.1f = %.1f'%(score, temp_parts[0][1], new_score))
-                            if len_contents > 0:
-                                new_score -= 1
+                            new_contents = vector[int]()
+
+                            if call_depth != 0:
+                                new_contents.reserve(len_contents+temp_parts_length)
+                                for m in range(len_contents):
+                                    new_contents.push_back(contents[m])
+                                for m in range(temp_parts_length):
+                                    new_contents.push_back(temp_contents[0][m])
+                                
+                                new_score = score + temp_parts[0][1]
                                 IF DEBUG:
                                     with gil:
-                                        print(' '*call_depth + 'score: %.1f (len_contents > 0)'%(new_score))
+                                        print(' '*call_depth + 'score: %.1f + %.1f = %.1f'%(score, temp_parts[0][1], new_score))
+                                if len_contents > 0:
+                                    new_score -= 1
+                                    IF DEBUG:
+                                        with gil:
+                                            print(' '*call_depth + 'score: %.1f (len_contents > 0)'%(new_score))
 
-                            # The final split here
-                            if call_depth == 0:
+                            else:
+                                # The final split here
+                                new_contents.reserve(len_contents+temp_parts_length+4)
+                                for j in range(len_contents):
+                                    if part_id_to_irregular_parts.find(contents[j]) == part_id_to_irregular_parts.end():
+                                        new_contents.push_back(contents[j])
+                                    else:
+                                        contents_tmp = &(part_id_to_irregular_parts[contents[j]][0])
+                                        for m in range(contents_tmp.size()):
+                                            new_contents.push_back(contents_tmp[0][m])
+                                for j in range(temp_parts_length):
+                                    if part_id_to_irregular_parts.find(temp_contents[0][j]) == part_id_to_irregular_parts.end():
+                                        new_contents.push_back(temp_contents[0][j])
+                                    else:
+                                        contents_tmp = &(part_id_to_irregular_parts[temp_contents[0][j]][0])
+                                        for k in range(contents_tmp.size()):
+                                            new_contents.push_back(contents_tmp[0][k])
+
+
+                                new_score = score + temp_parts[0][1]
+                                if len_contents > 0:
+                                    new_score -= 1
+
                                 # Prefer splits that have a root
                                 # if no root, punish! 
                                 IF DEBUG:
@@ -2700,7 +3330,7 @@ cdef void tokenize_inner(
             break
         if repeated > 0:
             
-            new_parts = (vector[long](), 0, 0, 0)
+            new_parts = (vector[int](), 0, 0, 0)
             ret = vector[Parts]()
             ret.reserve(1024)
             tokenize_inner(
@@ -2741,18 +3371,39 @@ cdef void tokenize_inner(
                         )
 
 
-                    new_contents = vector[long]()
-                    new_contents.reserve(len_contents+temp_parts_length)
-                    for m in range(len_contents):
-                        new_contents.push_back(contents[m])
-                    for m in range(temp_parts_length):
-                        new_contents.push_back(temp_contents[0][m])
-                    
-                    new_score = score + temp_parts[0][1]
-                    if len_contents > 0:
-                        new_score -= 1
+                    new_contents = vector[int]()
+                    if call_depth != 0:
+                        new_contents.reserve(len_contents+temp_parts_length)
+                        for m in range(len_contents):
+                            new_contents.push_back(contents[m])
+                        for m in range(temp_parts_length):
+                            new_contents.push_back(temp_contents[0][m])
+                        
+                        new_score = score + temp_parts[0][1]
+                        if len_contents > 0:
+                            new_score -= 1
+                    else:
+                        new_contents.reserve(len_contents+temp_parts_length+4)
 
-                    if call_depth == 0:
+                        for j in range(len_contents):
+                            if part_id_to_irregular_parts.find(contents[j]) == part_id_to_irregular_parts.end():
+                                new_contents.push_back(contents[j])
+                            else:
+                                contents_tmp = &(part_id_to_irregular_parts[contents[j]][0])
+                                for m in range(contents_tmp.size()):
+                                    new_contents.push_back(contents_tmp[0][m])
+                        for j in range(temp_parts_length):
+                            if part_id_to_irregular_parts.find(temp_contents[0][j]) == part_id_to_irregular_parts.end():
+                                new_contents.push_back(temp_contents[0][j])
+                            else:
+                                contents_tmp = &(part_id_to_irregular_parts[temp_contents[0][j]][0])
+                                for k in range(contents_tmp.size()):
+                                    new_contents.push_back(contents_tmp[0][k])
+                        
+                        new_score = score + temp_parts[0][1]
+                        if len_contents > 0:
+                            new_score -= 1
+
                         # Prefer splits that have a root
                         # The final split here, if no root, punish! 
                         has_root = False

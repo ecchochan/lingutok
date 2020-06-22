@@ -33,7 +33,7 @@ ext_modules = [
         "src/std_iostream.cpp",
         "src/trie.cpp"
     ], 
-    include_dirs=[MARISA_INCLUDE_DIR],
+    include_dirs=[MARISA_INCLUDE_DIR, "utf8proc"],
     extra_compile_args=['-fopenmp'],
     extra_link_args=['-fopenmp'],),
 ]
@@ -45,6 +45,9 @@ setup(
     libraries=[("libmarisa-trie", {
         "sources": MARISA_FILES,
         "include_dirs": [MARISA_SOURCE_DIR, MARISA_INCLUDE_DIR]
+    }), ("libutf8proc", {
+        "sources": ["utf8proc/utf8proc.c"],
+        "include_dirs": ["utf8proc"]
     })],
     ext_modules=ext_modules,
     package_data={'LinguisticTokenizer': ['resources/*']}
