@@ -1,7 +1,6 @@
 # cython: language_level=2
 
 cdef extern from "<utf8proc.h>" nogil:
-
     ctypedef enum utf8proc_option_t:
         UTF8PROC_NULLTERM  = (1<<0),
         UTF8PROC_STABLE    = (1<<1),

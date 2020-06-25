@@ -16,6 +16,7 @@ cimport iostream
 cimport base
 from utf8proc cimport utf8proc_NFKD_strip
 
+from lrucache cimport lru_cache
 
 
 import itertools
@@ -2533,7 +2534,7 @@ def load(str path, str name, bint profile=False, bint debug=False):
     assert size == <int>part_id_to_irregular_parts.size(), "part_id_to_irregular_parts size mismatch. Got %s, should be %s"%(part_id_to_irregular_parts.size(), size)
 
     print('part_id_to_irregular_parts:', part_id_to_irregular_parts.size() )
-    print(part_id_to_irregular_parts)
+    # print(part_id_to_irregular_parts)
 
 
 
@@ -2693,36 +2694,76 @@ def load(str path, str name, bint profile=False, bint debug=False):
 
 cdef float MIN_SCORE_RATIO = 1.25
 
-                
+cdef extern from *:
+    ctypedef int int128 "__int128_t"
 
-cdef int tokenize_word_auto(char* chars, int length, vector[int]* result_contents):
-    cdef int max_call_depth 
+ctypedef vector[int] vector_int
+ctypedef lru_cache[int128, vector_int*] lru_cache_int128_vector_int_star
 
-    if length > 16:
-        max_call_depth = 2
-    elif length > 8:
-        max_call_depth = 3
-    else:
-        max_call_depth = 4
+cdef lru_cache_int128_vector_int_star* tokenize_lru_cache = new lru_cache_int128_vector_int_star(1024*1024)
+
+
+cdef int128** int128_power = <int128**> malloc(sizeof(int128*) * 26)
+
+for i in range(26):
+    int128_power[i] = <int128*> malloc(sizeof(int128) * 27)
+    for j in range(27):
+        int128_power[i][j] = (j+1) * <int128>26**i
+
+
+cdef vector[int]* tokenize_word_auto_c(char* chars, int length, bint use_cache, bint to_vocab_id) nogil:
+    cdef int max_call_depth, i
+    cdef unsigned long cache_key = 0
+    cdef vector[int]* result_contents
+    cdef size_t t
+    if length <= 26:
+        for i in range(length):
+            t = chars[i]
+            if t == 39:
+                cache_key += int128_power[26][i]
+            elif t >= 97 and t <= 122:
+                cache_key += int128_power[t-97][i]
+
+
+    openmp.omp_set_lock(&lock)
+    if use_cache and tokenize_lru_cache.exists(cache_key):
+        openmp.omp_unset_lock(&lock)
+        return tokenize_lru_cache.get(cache_key)
+
+    result_contents = new vector[int]()
+    result_contents.reserve(8)
+    tokenize_lru_cache.put(cache_key, result_contents)
+    openmp.omp_unset_lock(&lock)
+    
+    max_call_depth = 4
 
     _tokenize_word(chars, length, result_contents, max_call_depth, MIN_SCORE_RATIO, False)
 
-    return 1
+    if to_vocab_id:
+        for i in range(result_contents[0].size()):
+            if true_part_id_to_vocab_id.find(result_contents[0][i]) == true_part_id_to_vocab_id.end():
+                return NULL
+            result_contents[0][i] = true_part_id_to_vocab_id[result_contents[0][i]]
+            
+    return result_contents
+
+def tokenize_word_auto(str word, bint use_cache=False, bint to_vocab_id=False):
+    cdef:
+        bytes b_word = word.encode('utf-8')
+    return tokenize_word_auto_c(<char *> b_word, len(b_word), use_cache, to_vocab_id)[0]
 
 
-def tokenize_word(str word, int max_call_depth = 3, float min_score_ratio = 1.5, bint return_candidates = False, bint debug=False):
+
+
+
+def tokenize_word(str word, int max_call_depth = 3, float min_score_ratio = 1.5, bint return_candidates = False, bint debug=False, bint to_vocab_id=False):
     cdef:
         vector[Parts] results
         bytes b_word = word.encode('utf-8')
         int length = len(word)
 
     if max_call_depth == 0:
-        if length > 16:
-            max_call_depth = 2
-        elif length > 8:
-            max_call_depth = 3
-        else:
-            max_call_depth = 4
+        max_call_depth = 4
 
     if max_call_depth < 2:
         max_call_depth = 2
@@ -2734,6 +2775,11 @@ def tokenize_word(str word, int max_call_depth = 3, float min_score_ratio = 1.5,
     result_contents.reserve(8)
     _tokenize_word(<char *>b_word, length, &result_contents, max_call_depth, min_score_ratio, debug)
 
+    if to_vocab_id:
+        for i in range(result_contents.size()):
+            if true_part_id_to_vocab_id.find(result_contents[i]) == true_part_id_to_vocab_id.end():
+                return 0
+            result_contents[i] = true_part_id_to_vocab_id[result_contents[i]]
     return result_contents
 
 
@@ -2857,6 +2903,7 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
         float cmp_max_score , score
         vector[Parts] results
 
+
     for i in range(length+1):
         cache.push_back(vector[Parts]())
     
@@ -2866,9 +2913,12 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
         results = vector[Parts]()
         results.reserve(1024)
         tokenize_inner(chars, cursor, length, parts, &cache, max_call_depth, &max_score, min_score_ratio, call_depth, &results)
+            
+
+
         size = results.size()
         if size == 0:
-            break
+            return 0
 
         cmp_max_score = -100
         i = 0
@@ -2892,7 +2942,7 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
         cursor = results[i][2]
 
 
-    i = 0
+    i = -1
     cmp_max_score = -100
 
     for j in range(size):
@@ -2902,8 +2952,10 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
                 cmp_max_score = score
                 i = j
 
-
     result_contents.insert(result_contents.end(),results[i][0].begin(),results[i][0].end())
+
+    if i == -1:
+        return 0
 
 
     return 1
@@ -2951,506 +3003,279 @@ cdef void tokenize_inner(
     # assert cache[0].size() > cursor, "cache[0].size() > cursor"
     cache_value = &cache[0][cursor]  
     cache_length = cache_value.size()
-    IF DEBUG:
-        with gil:
-            print(' '*call_depth + '** call start **')
-            print(' '*call_depth + 'parts:  %r'%parts)
-            print(' '*call_depth + 'cursor: %r'%cursor)
-            print(' ')
 
     if cache_length > 0:
         for i in range(cache_length):
-            temp_parts = &(cache_value[0][i])
-            temp_contents = &(temp_parts[0][0])
-            temp_parts_length = temp_contents.size()
-            # assert temp_parts_length > 0, "A: assert temp_parts_length > 0"
-
-            if len_contents > 0:
-                A_part = contents[len_contents-1]
-                B_part = temp_contents[0][0]
-                if adjacent_violate_c(A_part, B_part):
-                    continue
-
-            #if len_contents+temp_parts_length > max_call_depth:
-            #    continue
-
-            new_contents = vector[int]()
-            new_contents.reserve(len_contents+temp_parts_length)
-            for j in range(len_contents):
-                new_contents.push_back(contents[j])
-            for j in range(temp_parts_length):
-                new_contents.push_back(temp_contents[0][j])
-            
-            new_score = score + temp_parts[0][1]
-            IF DEBUG:
-                with gil:
-                    print(' '*call_depth + '** cached combine **')
-                    print(' '*call_depth + 'left:  %s'%(' '.join(all_parts_list[e//9-1]+' (%s)'%FORMS[e%3] for e in contents),))
-                    print(' '*call_depth + 'right: %s'%(' '.join(all_parts_list[e//9-1]+' (%s)'%FORMS[e%3] for e in temp_contents[0]),))
-                    print(' '*call_depth + 'score: %.1f + %.1f = %.1f'%(score, temp_parts[0][1], new_score))
-
-            if len_contents > 0:
-                new_score -= 1
-
-            IF DEBUG:
-                with gil:
-                    print(' '*call_depth + 'score: %.1f (len_contents > 0)'%(new_score))
-                    print(' '*call_depth + '#############')
-                    print(' ')
-                    
-            if new_score < max_score[0] * min_score_ratio:
-                continue
-
-            returns.push_back((new_contents, new_score, temp_parts[0][2], temp_parts[0][3] if temp_parts[0][3] > len_part_max else len_part_max)) 
+            merge_two_parts(
+                &parts,
+                &(cache_value[0][i]),
+                returns,
+                &to_be_cached,
+                call_depth,
+                max_score,
+                False,
+                min_score_ratio
+            )
     
         return
 
     cdef bint matched = False
 
 
-    while cursor < length:
+    to_be_cached = vector[Parts]()
+    to_be_cached.reserve(1024)
 
-        to_be_cached = vector[Parts]()
-        to_be_cached.reserve(1024)
-
-        len_this = length - cursor
+    len_this = length - cursor
+    
+    prefixes_ids = trie_obj._prefixes_id(
+        word + cursor,        # pass the characters starting from `cursor` position
+        len_this,      # pass the length after the `cursor` position
+    )
+    
+    # iterate the prefixes
+    # i.e. internal  ->  in, inter, intern
+    for i from prefixes_ids.size()-1 >= i >= 0: 
+        p = prefixes_ids[i]
+        len_p = true_prefixes_lengths[p]
         
-        prefixes_ids = trie_obj._prefixes_id(
-            word + cursor,        # pass the characters starting from `cursor` position
-            len_this,      # pass the length after the `cursor` position
-        )
-        IF DEBUG:
-            with gil:
-                print(' '*call_depth + '** prefixes found **')
-                print(' '*call_depth + '>> %r'%(prefixes_ids,))
-                print(' '*call_depth + '#############')
-                print(' ')
+        matched = True
+        true_trie_value = &true_trie_values[p]
 
-        # below is no need now, length penalty will be calculated at last
-        # iterate the prefixes in descending order in length
-        # i.e. internal  ->  in, inter, intern
-        for i from prefixes_ids.size()-1 >= i >= 0: 
-            p = prefixes_ids[i]
-            # assert true_prefixes_lengths.find(p) != true_prefixes_lengths.end(), "A: true_prefixes_lengths.find(p) != true_prefixes_lengths.end()"
-            len_p = true_prefixes_lengths[p]
-            
-            matched = True
-            true_trie_value = &true_trie_values[p]
+        # iterate the possible parts
+        # i.e. internal  ->  intern (R),           inter (P),   in (P), in (R), in (S)
+        # i.e. reducing  ->  reduce (R) ing (S),   red (R),     re (P)
+        for j in range(<int>true_trie_value.size()):
+            temp_parts = &(true_trie_value[0][j])
 
-
-
-            # iterate the possible parts
-            # i.e. internal  ->  intern (R),           inter (P),   in (P), in (R), in (S)
-            # i.e. reducing  ->  reduce (R) ing (S),   red (R),     re (P)
-            for j in range(<int>true_trie_value.size()):
-                temp_parts = &(true_trie_value[0][j])
-                temp_contents = &(temp_parts[0][0])
-                temp_parts_length = temp_contents.size()
+            # split ends here
+            # cursor + len_p == length
+            if len_p == len_this or call_depth >= max_call_depth: 
+                new_parts = (
+                    temp_parts[0][0],
+                    temp_parts[0][1],
+                    cursor+len_p,
+                    len_part_max if len_part_max > temp_parts[0][3] else temp_parts[0][3],
+                )
+                to_be_cached.push_back(new_parts)
+                merge_two_parts(
+                    &parts,
+                    &new_parts,
+                    returns,
+                    &to_be_cached,
+                    call_depth,
+                    max_score,
+                    True,
+                    min_score_ratio
+                )
                 
-                len_p_part_max = len_part_max if len_part_max > temp_parts[0][3] else temp_parts[0][3]
                 
-                # assert temp_parts_length > 0, "B: assert temp_parts_length > 0"
+            else:
+                ret = vector[Parts]()
+                ret.reserve(1024)
 
-                IF DEBUG:
-                    with gil:
-                        print(' '*call_depth + '** prefix `%s` **'%(
-                            ' '.join(
-                                (all_parts_list[e//9-1]+' (%s)'%FORMS[e%3])
-                                for e in temp_contents[0]
-                                )
-                            )
+                tokenize_inner(
+                    word, 
+                    cursor+len_p, 
+                    length, 
+                    temp_parts[0], 
+                    cache, 
+                    max_call_depth, 
+                    max_score,
+                    min_score_ratio,
+                    call_depth+1, 
+                    &ret
+                )
+                len_ret = ret.size()
+                if len_ret > 0:
+                    for k in range(len_ret):
+                        merge_two_parts(
+                            &parts,
+                            &ret[k],
+                            returns,
+                            &to_be_cached,
+                            call_depth,
+                            max_score,
+                            True,
+                            min_score_ratio
                         )
-                    
-                # split ends here
-                # cursor + len_p == length
-                if len_p == len_this or call_depth >= max_call_depth: 
-                    to_be_cached.push_back((temp_parts[0][0], temp_parts[0][1], cursor+len_p, len_p_part_max))
-                    
-                    if len_contents > 0:
-                        A_part = contents[len_contents-1]
-                        B_part = temp_contents[0][0]
-                        if adjacent_violate_c(A_part, B_part):
-                            continue
-                            
-                    #if len_contents+temp_parts_length > max_call_depth:
-                    #    continue
+                        
 
-                    IF DEBUG:
-                        with gil:
-                            if len_p == len_this:
-                                print(' '*call_depth + '** split ends (euqal) **')
-                            else:
-                                print(' '*call_depth + '** split ends (reach max depth) **')
+                        
+    repeated = 0
+    while True:
+        _cursor = cursor+repeated
+        if _cursor > 0 and _cursor < length - 1 and word[_cursor] == word[_cursor-1]:
+            repeated += 1
+            continue
+        break
+    if repeated > 0:
+        pass
+    else:
+        new_parts = (vector[int](), 0, 0, 0)
+        if true_all_alphabets.find(word[cursor]) != true_all_alphabets.end():
+            new_parts[0].push_back(
+                get_part(true_all_alphabets[word[cursor]], ROOT, MERGE_MODE_BOTH)
+            )
+    if not matched:
+        ret = vector[Parts]()
+        ret.reserve(1024)
+        tokenize_inner(
+            word, 
+            cursor+repeated, 
+            length, 
+            new_parts, 
+            cache, 
+            max_call_depth, 
+            max_score,
+            min_score_ratio,
+            call_depth+1, 
+            &ret
+        )
 
-                    new_contents = vector[int]()
-                    if call_depth != 0:
-                        new_contents.reserve(len_contents+temp_parts_length)
-                        for j in range(len_contents):
-                            new_contents.push_back(contents[j])
-                        for j in range(temp_parts_length):
-                            new_contents.push_back(temp_contents[0][j])
+        # below are copied from above
+        
+        len_ret = ret.size()
+        
+        if len_ret > 0:
+            for k in range(len_ret):
+                temp_parts = &ret[k]
 
-                        new_score = score + temp_parts[0][1]
-                        if len_contents > 0:
-                            new_score -= 1
+                temp_contents = &(temp_parts[0][0])
 
-                    else:
-                        # The final split here
-                        new_contents.reserve(len_contents+temp_parts_length+4)
-                        for j in range(len_contents):
-                            if part_id_to_irregular_parts.find(contents[j]) == part_id_to_irregular_parts.end():
-                                new_contents.push_back(contents[j])
-                            else:
-                                contents_tmp = &(part_id_to_irregular_parts[contents[j]][0])
-                                for k in range(contents_tmp.size()):
-                                    new_contents.push_back(contents_tmp[0][k])
-
-                        for j in range(temp_parts_length):
-                            if part_id_to_irregular_parts.find(temp_contents[0][j]) == part_id_to_irregular_parts.end():
-                                new_contents.push_back(temp_contents[0][j])
-                            else:
-                                contents_tmp = &(part_id_to_irregular_parts[temp_contents[0][j]][0])
-                                for k in range(contents_tmp.size()):
-                                    new_contents.push_back(contents_tmp[0][k])
-
-                        new_score = score + temp_parts[0][1]
-                        if len_contents > 0:
-                            new_score -= 1
-
-                        # Prefer splits that have a root
-                        # if no root, punish! 
-                        IF DEBUG:
-                            with gil:
-                                print(' '*call_depth + '** split ends (final) **')
-
-                        has_root = False
-                        for m in range(len_contents+temp_parts_length):
-                            A_part = new_contents[m]
-                            A_part_form = A_part % 3
-                            if A_part_form == ROOT:
-                                has_root = True
-                                break
-                        if not has_root:
-                            new_score -= 1
-                            IF DEBUG:
-                                with gil:
-                                    print(' '*call_depth + 'score: %.1f (no root)'%(new_score))
-
-                        # ends with prefix and start with suffix is not good
-                        for m from len_contents+temp_parts_length-1 >= m >= 0: 
-                            A_part = new_contents[m]
-                            A_part_form = A_part % 3
-                            if A_part_form == PREFIX:
-                                new_score -= 1
-                                IF DEBUG:
-                                    with gil:
-                                        print(' '*call_depth + 'score: %.1f (prefix at the end)'%(new_score))
-                                break
-                            elif A_part_form == SUFFIX:
-                                continue
-                            break
-
-                        for m in range(len_contents+temp_parts_length):
-                            A_part = new_contents[m]
-                            A_part_form = A_part % 3
-                            if A_part_form == SUFFIX:
-                                new_score -= 1
-                                IF DEBUG:
-                                    with gil:
-                                        print(' '*call_depth + 'score: %.1f (suffix at the head)'%(new_score))
-                                break
-                            elif A_part_form == PREFIX:
-                                continue
-                            break
-                            
-
-                        #if new_score > max_score[0]:
-                        #    max_score[0] = new_score
-                    if new_score < max_score[0] * min_score_ratio:
-                        continue
-                            
-                    IF DEBUG:
-                        with gil:
-                            print(' '*call_depth + 'new_parts: %r'%((new_contents, new_score),))
-                    returns.push_back((new_contents, new_score, cursor + len_p, len_p_part_max)) 
-
-                else:
-                    ret = vector[Parts]()
-                    ret.reserve(1024)
-
-                    tokenize_inner(
-                        word, 
-                        cursor+len_p, 
-                        length, 
-                        temp_parts[0], 
-                        cache, 
-                        max_call_depth, 
-                        max_score,
-                        min_score_ratio,
-                        call_depth+1, 
-                        &ret
-                    )
-                    len_ret = ret.size()
-                    if len_ret > 0:
-                        for k in range(len_ret):
-                            temp_parts = &(ret[k])
-                            temp_contents = &(temp_parts[0][0])
-                            temp_parts_length = temp_contents.size()
-                            # assert temp_parts_length > 0, "B: assert temp_parts_length > 0"
-
-                            if len_contents > 0:
-                                A_part = contents[len_contents-1]
-                                B_part = temp_contents[0][0]
-                                if adjacent_violate_c(A_part, B_part):
-                                    continue
-
-                            #if len_contents+temp_parts_length > max_call_depth:
-                            #    continue
-
-                            IF DEBUG:
-                                with gil:
-                                    print(' '*call_depth + '** ret `%s` **'%(
-                                        ' '.join(
-                                            (all_parts_list[e//9-1]+' (%s)'%FORMS[e%3])
-                                            for e in temp_contents[0]
-                                            )
-                                        )
-                                    )
-
-                            to_be_cached.push_back(
-                                (temp_parts[0][0], temp_parts[0][1], temp_parts[0][2], temp_parts[0][3] if temp_parts[0][3] > len_p_part_max else len_p_part_max)
-                                )
-
-                            new_contents = vector[int]()
-
-                            if call_depth != 0:
-                                new_contents.reserve(len_contents+temp_parts_length)
-                                for m in range(len_contents):
-                                    new_contents.push_back(contents[m])
-                                for m in range(temp_parts_length):
-                                    new_contents.push_back(temp_contents[0][m])
-                                
-                                new_score = score + temp_parts[0][1]
-                                IF DEBUG:
-                                    with gil:
-                                        print(' '*call_depth + 'score: %.1f + %.1f = %.1f'%(score, temp_parts[0][1], new_score))
-                                if len_contents > 0:
-                                    new_score -= 1
-                                    IF DEBUG:
-                                        with gil:
-                                            print(' '*call_depth + 'score: %.1f (len_contents > 0)'%(new_score))
-
-                            else:
-                                # The final split here
-                                new_contents.reserve(len_contents+temp_parts_length+4)
-                                for j in range(len_contents):
-                                    if part_id_to_irregular_parts.find(contents[j]) == part_id_to_irregular_parts.end():
-                                        new_contents.push_back(contents[j])
-                                    else:
-                                        contents_tmp = &(part_id_to_irregular_parts[contents[j]][0])
-                                        for m in range(contents_tmp.size()):
-                                            new_contents.push_back(contents_tmp[0][m])
-                                for j in range(temp_parts_length):
-                                    if part_id_to_irregular_parts.find(temp_contents[0][j]) == part_id_to_irregular_parts.end():
-                                        new_contents.push_back(temp_contents[0][j])
-                                    else:
-                                        contents_tmp = &(part_id_to_irregular_parts[temp_contents[0][j]][0])
-                                        for k in range(contents_tmp.size()):
-                                            new_contents.push_back(contents_tmp[0][k])
-
-
-                                new_score = score + temp_parts[0][1]
-                                if len_contents > 0:
-                                    new_score -= 1
-
-                                # Prefer splits that have a root
-                                # if no root, punish! 
-                                IF DEBUG:
-                                    with gil:
-                                        print(' '*call_depth + '** split ends (final 2) **')
-                                has_root = False
-                                for m in range(len_contents+temp_parts_length):
-                                    A_part = new_contents[m]
-                                    A_part_form = A_part % 3
-                                    if A_part_form == ROOT:
-                                        has_root = True
-                                        break
-                                if not has_root:
-                                    new_score -= 1
-                                    IF DEBUG:
-                                        with gil:
-                                            print(' '*call_depth + 'score: %.1f (no root)'%(new_score))
-
-                                # ends with prefix and start with suffix is not good
-                                for m from len_contents+temp_parts_length-1 >= m >= 0: 
-                                    A_part = new_contents[m]
-                                    A_part_form = A_part % 3
-                                    if A_part_form == PREFIX:
-                                        new_score -= 1
-                                        IF DEBUG:
-                                            with gil:
-                                                print(' '*call_depth + 'score: %.1f (prefix at the end)'%(new_score))
-                                        break
-                                    elif A_part_form == SUFFIX:
-                                        continue
-                                    break
-                                    
-                                for m in range(len_contents+temp_parts_length):
-                                    A_part = new_contents[m]
-                                    A_part_form = A_part % 3
-                                    if A_part_form == SUFFIX:
-                                        new_score -= 1
-                                        IF DEBUG:
-                                            with gil:
-                                                print(' '*call_depth + 'score: %.1f (suffix at the head)'%(new_score))
-                                        break
-                                    elif A_part_form == PREFIX:
-                                        continue
-                                    break
-                                    
-                                if new_score > max_score[0]:
-                                    max_score[0] = new_score
-                            if new_score < max_score[0] * min_score_ratio:
-                                continue
+                merge_two_parts(
+                    &parts,
+                    &ret[k],
+                    returns,
+                    &to_be_cached,
+                    call_depth,
+                    max_score,
+                    True,
+                    min_score_ratio
+                )
 
 
 
-                            IF DEBUG:
-                                with gil:
-                                    print(' '*call_depth + 'new_parts: %r'%((new_contents, new_score),))
-                            returns.push_back((new_contents, new_score, temp_parts[0][2], temp_parts[0][3] if temp_parts[0][3] > len_p_part_max else len_p_part_max)) 
+    cache[0][cursor] = to_be_cached
+    
 
-                            
-        repeated = 0
-        while True:
-            _cursor = cursor+repeated
-            if _cursor > 0 and _cursor < length - 1 and word[_cursor] == word[_cursor-1]:
-                repeated += 1
+
+cdef void merge_two_parts(
+    Parts* A_parts, 
+    Parts* B_parts, 
+    vector[Parts]* returns, 
+    vector[Parts]* to_be_cached, 
+    int call_depth,
+    float* max_score, 
+    bint do_cache,
+    float min_score_ratio
+    ) nogil:
+    cdef:
+        vector[int]* A_contents = &(A_parts[0][0])
+        vector[int]* B_contents = &(B_parts[0][0])
+        vector[int]* contents_tmp
+
+        float A_score = A_parts[0][1]
+        float B_score = B_parts[0][1]
+        float new_score
+
+        int A_length = A_contents[0].size()
+        int B_length = B_contents[0].size()
+
+        int A_part, B_part
+
+        int A_part_form
+
+        int len_A_part_max = A_parts[0][3]
+        int len_B_part_max = B_parts[0][3]
+
+        int m
+
+        bint has_root
+
+        vector[int] new_contents
+
+
+    if A_length > 0:
+        A_part = A_contents[0][A_length-1]
+        B_part = B_contents[0][0]
+        if adjacent_violate_c(A_part, B_part):
+            return
+
+    if do_cache:
+        to_be_cached[0].push_back(B_parts[0])
+
+
+    new_contents = vector[int]()
+    new_score = A_score + B_score
+    if A_length > 0:
+        new_score -= 1
+    has_root = False
+
+    if call_depth != 0:
+        new_contents.reserve(A_length+B_length)
+        for m in range(A_length):
+            new_contents.push_back(A_contents[0][m])
+        for m in range(B_length):
+            new_contents.push_back(B_contents[0][m])
+        
+    else:
+        # The final split here, 
+        new_contents.reserve(A_length+B_length+4)
+
+        for m in range(A_length):
+            if part_id_to_irregular_parts.find(A_contents[0][m]) == part_id_to_irregular_parts.end():
+                new_contents.push_back(A_contents[0][m])
+            else:
+                contents_tmp = &(part_id_to_irregular_parts[A_contents[0][m]][0])
+                for m in range(contents_tmp.size()):
+                    new_contents.push_back(contents_tmp[0][m])
+
+        for m in range(B_length):
+            if part_id_to_irregular_parts.find(B_contents[0][m]) == part_id_to_irregular_parts.end():
+                new_contents.push_back(B_contents[0][m])
+            else:
+                contents_tmp = &(part_id_to_irregular_parts[B_contents[0][m]][0])
+                for m in range(contents_tmp.size()):
+                    new_contents.push_back(contents_tmp[0][m])
+
+        # Prefer splits that have a root
+        # if no root, punish! 
+        for m in range(A_length+B_length):
+            A_part = new_contents[m]
+            A_part_form = A_part % 3
+            if A_part_form == ROOT:
+                has_root = True
+                break
+        if not has_root:
+            new_score -= 1
+
+        # ends with prefix and start with suffix is not good
+        for m from A_length+B_length-1 >= m >= 0: 
+            A_part = new_contents[m]
+            A_part_form = A_part % 3
+            if A_part_form == PREFIX:
+                new_score -= 1
+            elif A_part_form == SUFFIX:
                 continue
             break
-        if repeated > 0:
-            
-            new_parts = (vector[int](), 0, 0, 0)
-            ret = vector[Parts]()
-            ret.reserve(1024)
-            tokenize_inner(
-                word, 
-                cursor+repeated, 
-                length, 
-                new_parts, 
-                cache, 
-                max_call_depth, 
-                max_score,
-                min_score_ratio,
-                call_depth+1, 
-                &ret
-            )
-
-            # below are copied from above
-            
-            len_ret = ret.size()
-            
-            if len_ret > 0:
-                for k in range(len_ret):
-                    temp_parts = &ret[k]
-                    temp_contents = &(temp_parts[0][0])
-                    temp_parts_length = temp_contents.size()
-                    # assert temp_parts_length > 0, "C: assert temp_parts_length > 0"
-
-                    if len_contents > 0:
-                        A_part = contents[len_contents-1]
-                        B_part = temp_contents[0][0]
-                        if adjacent_violate_c(A_part, B_part):
-                            continue
-
-                    #if len_contents+temp_parts_length > max_call_depth:
-                    #    continue
-
-                    to_be_cached.push_back(
-                        (temp_parts[0][0], temp_parts[0][1], temp_parts[0][2], temp_parts[0][3] if temp_parts[0][3] > len_part_max else len_part_max)
-                        )
-
-
-                    new_contents = vector[int]()
-                    if call_depth != 0:
-                        new_contents.reserve(len_contents+temp_parts_length)
-                        for m in range(len_contents):
-                            new_contents.push_back(contents[m])
-                        for m in range(temp_parts_length):
-                            new_contents.push_back(temp_contents[0][m])
-                        
-                        new_score = score + temp_parts[0][1]
-                        if len_contents > 0:
-                            new_score -= 1
-                    else:
-                        new_contents.reserve(len_contents+temp_parts_length+4)
-
-                        for j in range(len_contents):
-                            if part_id_to_irregular_parts.find(contents[j]) == part_id_to_irregular_parts.end():
-                                new_contents.push_back(contents[j])
-                            else:
-                                contents_tmp = &(part_id_to_irregular_parts[contents[j]][0])
-                                for m in range(contents_tmp.size()):
-                                    new_contents.push_back(contents_tmp[0][m])
-                        for j in range(temp_parts_length):
-                            if part_id_to_irregular_parts.find(temp_contents[0][j]) == part_id_to_irregular_parts.end():
-                                new_contents.push_back(temp_contents[0][j])
-                            else:
-                                contents_tmp = &(part_id_to_irregular_parts[temp_contents[0][j]][0])
-                                for k in range(contents_tmp.size()):
-                                    new_contents.push_back(contents_tmp[0][k])
-                        
-                        new_score = score + temp_parts[0][1]
-                        if len_contents > 0:
-                            new_score -= 1
-
-                        # Prefer splits that have a root
-                        # The final split here, if no root, punish! 
-                        has_root = False
-                        for m in range(len_contents+temp_parts_length):
-                            A_part = new_contents[m]
-                            A_part_form = A_part % 3
-                            if A_part_form == ROOT:
-                                has_root = True
-                                break
-                        if not has_root:
-                            new_score -= 1
-
-                        # ends with prefix and start with suffix is not good
-                        for m from len_contents+temp_parts_length-1 >= m >= 0: 
-                            A_part = new_contents[m]
-                            A_part_form = A_part % 3
-                            if A_part_form == PREFIX:
-                                new_score -= 1
-                                break
-                            elif A_part_form == SUFFIX:
-                                continue
-                        for m in range(len_contents+temp_parts_length):
-                            A_part = new_contents[m]
-                            A_part_form = A_part % 3
-                            if A_part_form == SUFFIX:
-                                new_score -= 1
-                                break
-                            elif A_part_form == PREFIX:
-                                continue
-
-                        if new_score > max_score[0]:
-                            max_score[0] = new_score
-                    if new_score < max_score[0] * min_score_ratio:
-                        continue
-
-                    returns.push_back((new_contents, new_score, temp_parts[0][2], temp_parts[0][3] if temp_parts[0][3] > len_part_max else len_part_max)) 
-
-        else:
-            score -= 1
-            if true_all_alphabets.find(word[cursor]) != true_all_alphabets.end():
-                contents.push_back(
-                    get_part(true_all_alphabets[word[cursor]], ROOT, MERGE_MODE_BOTH)
-                )
-                len_contents += 1
-                parts = (contents, score, cursor+1, len_part_max)
-
-        cache[0][cursor] = to_be_cached
-        if matched:
+        for m in range(A_length+B_length):
+            A_part = new_contents[m]
+            A_part_form = A_part % 3
+            if A_part_form == SUFFIX:
+                new_score -= 1
+            elif A_part_form == PREFIX:
+                continue
             break
-        cursor += 1
+
+        if new_score > max_score[0]:
+            max_score[0] = new_score
+    if new_score < max_score[0] * min_score_ratio:
+        return
+
+
+    returns.push_back(
+        (new_contents, 
+        new_score, 
+        B_parts[0][2], 
+        len_A_part_max if len_A_part_max > len_B_part_max else len_B_part_max)
+        ) 
