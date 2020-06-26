@@ -28,10 +28,10 @@ import numpy as pynp
 cimport numpy as np
 
 from cython.parallel cimport prange
-from libc.stdlib cimport malloc, free
+from libc.stdlib cimport malloc, free, realloc
 from libc.string cimport memcpy 
 from libc.stdio cimport printf
-
+from cython.operator cimport dereference as deref, preincrement as inc
 
 
 
@@ -665,7 +665,7 @@ cdef float ROOT_PUNISHMENT = 0.5
 '''
 
 
-ctypedef (vector[int], float, int,  int          ) Parts
+ctypedef (int*, float, int,  int          ) Parts
 #           part_ids    score  last  len_part_max
 
 
@@ -1091,45 +1091,52 @@ cdef bint adjacent_violate_c(int A_part, int B_part) nogil:
 
     cdef bint A_is_root = A_part_form == ROOT
 
+    cdef unordered_map[int, unordered_set[int]].iterator it1
+
     if (
         (A_part_merge_mode == MERGE_MODE_SINGLE and B_part_merge_mode != MERGE_MODE_SINGLE) or 
         A_part_merge_mode != MERGE_MODE_SINGLE and B_part_merge_mode == MERGE_MODE_SINGLE
         ):
         return False
 
+    it1 = true_no_prefixed_by_of.find(B)
     #if B in no_prefixed_by_of and A in no_prefixed_by_of[B]:
-    if (true_no_prefixed_by_of.find(B) != true_no_prefixed_by_of.end() and 
-        true_no_prefixed_by_of[B].find(A) != true_no_prefixed_by_of[B].end()):
+    if (it1 != true_no_prefixed_by_of.end() and 
+        deref(it1).second.find(A) != deref(it1).second.end()):
         return True
 
         
+    it1 = true_only_suffixed_by_of.find(A)
     #if A in only_suffixed_by_of and B not in only_suffixed_by_of[A]:
-    if (true_only_suffixed_by_of.find(A) != true_only_suffixed_by_of.end() and 
-        true_only_suffixed_by_of[A].find(B) == true_only_suffixed_by_of[A].end()):
+    if (it1 != true_only_suffixed_by_of.end() and 
+        deref(it1).second.find(B) == deref(it1).second.end()):
         return True
         
     if A_is_root:
+        it1 = true_no_suffixed_by_of_roots.find(A)
         #if A in no_suffixed_by_of_roots and (B in no_suffixed_by_of_roots[A] or len(no_suffixed_by_of_roots[A]) == 0):
-        if (true_no_suffixed_by_of_roots.find(A) != true_no_suffixed_by_of_roots.end() and 
+        if (it1 != true_no_suffixed_by_of_roots.end() and 
             (
-                true_no_suffixed_by_of_roots[A].size() == 0 or 
-                true_no_suffixed_by_of_roots[A].find(B) != true_no_suffixed_by_of_roots[A].end()
+                deref(it1).second.size() == 0 or 
+                deref(it1).second.find(B) != deref(it1).second.end()
             )):
             return True
 
     #elif A in no_suffixed_by_of_nonroots and (B in no_suffixed_by_of_nonroots[A] or len(no_suffixed_by_of_nonroots[A]) == 0):
-    elif (
-        true_no_suffixed_by_of_nonroots.find(A) != true_no_suffixed_by_of_nonroots.end() and 
+    else:
+        it1 = true_no_suffixed_by_of_nonroots.find(A)
+        if ( it1 != true_no_suffixed_by_of_nonroots.end() and 
             (
-                true_no_suffixed_by_of_nonroots[A].size() == 0 or 
-                true_no_suffixed_by_of_nonroots[A].find(B) != true_no_suffixed_by_of_nonroots[A].end()
+                deref(it1).second.size() == 0 or 
+                deref(it1).second.find(B) != deref(it1).second.end()
             )
-    ):
-        return True
+        ):
+            return True
         
     #if A in no_suffixed_by_of and B in no_suffixed_by_of[A]:
-    if (true_no_suffixed_by_of.find(A) != true_no_suffixed_by_of.end() and 
-        true_no_suffixed_by_of[A].find(B) != true_no_suffixed_by_of[A].end()):
+    it1 = true_no_suffixed_by_of.find(A)
+    if (it1 != true_no_suffixed_by_of.end() and 
+        deref(it1).second.find(B) != deref(it1).second.end()):
         return True
 
     return False
@@ -1575,16 +1582,6 @@ cdef unordered_map[int, int] true_prefixes_lengths
 
 cdef unordered_map[char, int] true_all_alphabets
 
-def convert_part_id_to_vocab_id(int x):
-    if true_part_id_to_vocab_id.find(x) != true_part_id_to_vocab_id.end():
-        return true_part_id_to_vocab_id[x]
-    return -1
-def convert_str_to_trie_id(str x):
-    return trie_obj[x]
-
-
-def convert_trie_id_to_parts(int x):
-    return true_trie_values[x]
 
     
 
@@ -1593,7 +1590,7 @@ def gen(bint debug=False):
     global mix_two_morphed_k
     global part_id
     cdef vector[Parts]* bucket
-    cdef vector[int] vec_part
+    cdef int* vec_part
     cdef int k, n, i,
     cdef long key, kk
 
@@ -1604,8 +1601,8 @@ def gen(bint debug=False):
         ensure_bucket(key)
         #print('%-20d: %s'%(key, e))
         bucket = &trie_values[key]
-        vec_part = vector[int]()
-        vec_part.reserve(1)
+        vec_part = <int*> malloc(sizeof(int)*2)
+        vec_part[0] = 1
         kk = get_part(k, 
                     PREFIX, 
                     MERGE_MODE_BOTH if e in single_words_any else 
@@ -1619,7 +1616,7 @@ def gen(bint debug=False):
 
         if debug:
             print('gen >> prefix :: '+e+' [part_id:%s] '%kk )
-        vec_part.push_back(kk)
+        vec_part[1] = kk
         bucket.push_back((vec_part, 0, 0, len(e)))
         prefixes_lengths[key] = prefixes_max_part_lengths[key] = len(e)
         
@@ -1636,8 +1633,8 @@ def gen(bint debug=False):
         key = hash_string(e)
         ensure_bucket(key)
         bucket = &trie_values[key]
-        vec_part = vector[int]()
-        vec_part.reserve(1)
+        vec_part = <int*> malloc(sizeof(int)*2)
+        vec_part[0] = 1
         kk = get_part(k, 
                     ROOT, 
                     MERGE_MODE_BOTH if e in single_words_any else 
@@ -1651,7 +1648,7 @@ def gen(bint debug=False):
         
         if debug:
             print('gen >> roots  :: '+e+' [part_id:%s] '%kk )
-        vec_part.push_back(kk)
+        vec_part[1] = kk
         bucket.push_back((vec_part, -ROOT_PUNISHMENT, 0, len(e)))
         prefixes_lengths[key] = prefixes_max_part_lengths[key] = len(e)
         assert len(e) > 0
@@ -1664,8 +1661,8 @@ def gen(bint debug=False):
         key = hash_string(e)
         ensure_bucket(key)
         bucket = &trie_values[key]
-        vec_part = vector[int]()
-        vec_part.reserve(1)
+        vec_part = <int*> malloc(sizeof(int)*2)
+        vec_part[0] = 1
         
         kk = get_part(k, 
                     SUFFIX, 
@@ -1680,7 +1677,7 @@ def gen(bint debug=False):
         
         if debug:
             print('gen >> suffix  :: '+e+' [part_id:%s] '%kk )
-        vec_part.push_back(kk)
+        vec_part[1] = kk
         bucket.push_back((vec_part, 0, 0, len(e)))
         prefixes_lengths[key] = prefixes_max_part_lengths[key] = len(e)
         assert len(e) > 0
@@ -1700,8 +1697,8 @@ def gen(bint debug=False):
         key = hash_string(e)
         ensure_bucket(key)
         bucket = &trie_values[key]
-        vec_part = vector[int]()
-        vec_part.reserve(1)
+        vec_part = <int*> malloc(sizeof(int)*2)
+        vec_part[0] = 1
         kk = get_part(k, 
                     ROOT, 
                     MERGE_MODE_BOTH if e in single_words_any else 
@@ -1715,7 +1712,7 @@ def gen(bint debug=False):
         
         if debug:
             print('gen >> roots  :: '+e+' [part_id:%s] '%kk )
-        vec_part.push_back(kk)
+        vec_part[1] = kk
         bucket.push_back((vec_part, -ROOT_PUNISHMENT, 0, len(e)))
         prefixes_lengths[key] = prefixes_max_part_lengths[key] = len(e)
         assert len(e) > 0
@@ -1740,16 +1737,15 @@ def gen(bint debug=False):
         ret = morphed_suffixes_merge_suffixes[i]
         ensure_bucket(ret.key)
         bucket = &trie_values[ret.key]
-        
-        vec_part = vector[int]()
-        vec_part.reserve(2)
+        vec_part = <int*> malloc(sizeof(int)*3)
+        vec_part[0] = 2
         kk = get_part(ret.A, SUFFIX, ret.A_merge_mode)
         if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "SS AB 1: %r"%ret
         kk = get_part(ret.B, SUFFIX, ret.B_merge_mode)
         if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "SS AB 2: %r"%ret
 
-        vec_part.push_back(get_part(ret.A, SUFFIX, ret.A_merge_mode))
-        vec_part.push_back(get_part(ret.B, SUFFIX, ret.B_merge_mode))
+        vec_part[1] = (get_part(ret.A, SUFFIX, ret.A_merge_mode))
+        vec_part[2] = (get_part(ret.B, SUFFIX, ret.B_merge_mode))
         bucket.push_back((vec_part, ret.score - 1, 0, ret.longest_length))
         prefixes_max_part_lengths[ret.key] = ret.longest_length
         prefixes_lengths[ret.key] = ret.morphed_length
@@ -1766,10 +1762,10 @@ def gen(bint debug=False):
         kk = get_part(ret.B, SUFFIX, ret.B_merge_mode)
         if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "RS AB 2: %r"%ret
         
-        vec_part = vector[int]()
-        vec_part.reserve(2)
-        vec_part.push_back(get_part(ret.A, ROOT, ret.A_merge_mode))
-        vec_part.push_back(get_part(ret.B, SUFFIX, ret.B_merge_mode))
+        vec_part = <int*> malloc(sizeof(int)*3)
+        vec_part[0] = 2
+        vec_part[1] = (get_part(ret.A, ROOT, ret.A_merge_mode))
+        vec_part[2] = (get_part(ret.B, SUFFIX, ret.B_merge_mode))
         bucket.push_back((vec_part, ret.score-ROOT_PUNISHMENT - 1, 0, ret.longest_length))
         
         prefixes_max_part_lengths[ret.key] = ret.longest_length
@@ -1793,11 +1789,11 @@ def gen(bint debug=False):
         if debug: assert kk in part_id_to_vocab_id, "SSS ABC 3: %r"%ret2
 
 
-        vec_part = vector[int]()
-        vec_part.reserve(3)
-        vec_part.push_back(get_part(ret2.A, SUFFIX, ret2.A_merge_mode))
-        vec_part.push_back(get_part(ret2.B, SUFFIX, ret2.B_merge_mode))
-        vec_part.push_back(get_part(ret2.C, SUFFIX, ret2.C_merge_mode))
+        vec_part = <int*> malloc(sizeof(int)*4)
+        vec_part[0] = 3
+        vec_part[1] = (get_part(ret2.A, SUFFIX, ret2.A_merge_mode))
+        vec_part[2] = (get_part(ret2.B, SUFFIX, ret2.B_merge_mode))
+        vec_part[3] = (get_part(ret2.C, SUFFIX, ret2.C_merge_mode))
         bucket.push_back((vec_part, ret2.score - 2, 0, ret2.longest_length))
 
         prefixes_max_part_lengths[ret2.key] = ret2.longest_length
@@ -1822,11 +1818,11 @@ def gen(bint debug=False):
         if debug: assert kk in part_id_to_vocab_id or e in irregular_exceptions, "RSS ABC 3: %r"%ret2
 
 
-        vec_part = vector[int]()
-        vec_part.reserve(3)
-        vec_part.push_back(get_part(ret2.A, ROOT, ret2.A_merge_mode))
-        vec_part.push_back(get_part(ret2.B, SUFFIX, ret2.B_merge_mode))
-        vec_part.push_back(get_part(ret2.C, SUFFIX, ret2.C_merge_mode))
+        vec_part = <int*> malloc(sizeof(int)*4)
+        vec_part[0] = 3
+        vec_part[1] = (get_part(ret2.A, ROOT, ret2.A_merge_mode))
+        vec_part[2] = (get_part(ret2.B, SUFFIX, ret2.B_merge_mode))
+        vec_part[3] = (get_part(ret2.C, SUFFIX, ret2.C_merge_mode))
         bucket.push_back((vec_part, ret2.score-ROOT_PUNISHMENT - 2, 0, ret2.longest_length))
         
         prefixes_max_part_lengths[ret2.key] = ret2.longest_length
@@ -1836,7 +1832,6 @@ def gen(bint debug=False):
         stay_alive.pop_back()
 
 
-from cython.operator cimport dereference as deref, preincrement as inc
 
 all_alphabets = ""
 def load_data(alphabets = "abcdefghijklmnopqrstuvwxyz", debug=False):
@@ -2074,13 +2069,16 @@ def make_irregular():
         Parts *temp_parts
         Parts parts
         float score, new_score, cmp_max_score
-        vector[int] contents, new_contents
-        vector[int]* temp_contents
+        float max_score = -100
+        int* contents
+        int* new_contents
+        int* temp_contents
         bint has_root
         int A_part, B_part
         int temp_parts_length
         int A_part_form, B_part_form
         int len_p_part_max, len_part_max, len_v, part_index
+        bint free_results = False
 
 
     for k, v in irregular_exceptions.items():
@@ -2101,10 +2099,12 @@ def make_irregular():
                 trie_id = trie_obj[part]
                 assert trie_id < true_trie_values.size(), 'true_trie_values size ? %s'%((k, v),)
                 repl = true_trie_values[trie_id]
+                free_results = False
             except:
                 repl = vector[Parts]()
                 b_part = part.encode('utf8')
                 _tokenize_word_to_parts(<char*>b_part, len(b_part), &repl, MIN_SCORE_RATIO, False)
+                free_results = True
                 
             if repl_combined.size() == 0:
                 for i in range(repl.size()):
@@ -2112,71 +2112,23 @@ def make_irregular():
             else:
                 repl_combined_temp = vector[Parts]()
                 for i in range(repl_combined.size()):
-                    contents = repl_combined[i][0]
-                    score = repl_combined[i][1]
-                    len_contents = contents.size()
-                    len_part_max = repl_combined[i][3]
                     for m in range(repl.size()):
-                        temp_parts = &(repl[m])
-                        temp_contents = &(temp_parts[0][0])
-                        temp_parts_length = temp_contents.size()
+                        merge_two_parts(
+                            &repl_combined[i],
+                            &(repl[m]),
+                            &repl_combined_temp,
+                            NULL,
+                            0 if part_index == len_v else 1,
+                            &max_score,
+                            False,
+                            1.25
+                        )
                         
-                        len_p_part_max = len_part_max if len_part_max > temp_parts[0][3] else temp_parts[0][3]
-
-                        new_contents = vector[int]()
-                        new_contents.reserve(len_contents+temp_parts_length)
-                        for j in range(len_contents):
-                            new_contents.push_back(contents[j])
-                        for j in range(temp_parts_length):
-                            new_contents.push_back(temp_contents[0][j])
-                        
-                        new_score = score + temp_parts[0][1] - 1
-
-                        if part_index == len_v:
-                            # Prefer splits that have a root
-                            # if no root, punish! 
-                            has_root = False
-                            for m in range(len_contents+temp_parts_length):
-                                A_part = new_contents[m]
-                                A_part_form = A_part % 3
-                                if A_part_form == ROOT:
-                                    has_root = True
-                                    break
-
-                            if not has_root:
-                                new_score -= 1
-                                
-                            # ends with prefix and start with suffix is not good
-                            for m from len_contents+temp_parts_length-1 >= m >= 0: 
-                                A_part = new_contents[m]
-                                A_part_form = A_part % 3
-                                if A_part_form == PREFIX:
-                                    new_score -= 1
-                                    break
-                                elif A_part_form == SUFFIX:
-                                    continue
-                                break
-
-                            for m in range(len_contents+temp_parts_length):
-                                A_part = new_contents[m]
-                                A_part_form = A_part % 3
-                                if A_part_form == SUFFIX:
-                                    new_score -= 1
-                                    break
-                                elif A_part_form == PREFIX:
-                                    continue
-                                break
-                              
-
-                        repl_combined_temp.push_back(
-                            (new_contents, 
-                            new_score, 
-                            temp_parts[0][2], 
-                            len_p_part_max)) 
-
-
                 repl_combined = repl_combined_temp
-            
+            if free_results:
+                for m in range(repl.size()):
+                    free(repl[m][0])
+                
             
         i = 0
         cmp_max_score = -100
@@ -2187,6 +2139,9 @@ def make_irregular():
             if score > cmp_max_score:
                 cmp_max_score = score
                 i = j
+        for j in range(repl_combined.size()):
+            if i != j:
+                free(repl_combined[j][0])
                 
         part_id_to_irregular_parts[part_id] = repl_combined[i]
 
@@ -2218,10 +2173,10 @@ def true_trie_values_to_np():
 
         for i in range(size):
             parts = vector_parts[i]
-            size2 = parts[0].size()
+            size2 = parts[0][0]
             assert size2 > 0, "% zero size (:2)"%key
 
-            if size2 == 1 and parts[0][0]%3 == ROOT:
+            if size2 == 1 and parts[0][1]%3 == ROOT:
                 assert parts[1] < 0
                 
 
@@ -2230,7 +2185,7 @@ def true_trie_values_to_np():
             buffer.push_back(size2)
 
             for j in range(size2):
-                part = parts[0][j]
+                part = parts[0][j+1]
                 assert part in part_id_to_vocab_id or all_parts_list[int(part/9) - 1] in irregular_exceptions, "part not in part_id_to_vocab_id (%s) [%s]"%(all_parts_list[int(part/9) - 1], int(part) )
 
                 buffer.push_back(part)
@@ -2247,10 +2202,10 @@ def true_trie_values_to_np():
 
         buffer.push_back(key)
 
-        size2 = parts[0].size()
+        size2 = parts[0][0]
         assert size2 > 0, "% zero size (:2)"%key
 
-        if size2 == 1 and parts[0][0]%3 == ROOT:
+        if size2 == 1 and parts[0][1]%3 == ROOT:
             assert parts[1] < 0
 
         buffer.push_back(<int>(parts[1]*100))
@@ -2258,7 +2213,7 @@ def true_trie_values_to_np():
         buffer.push_back(size2)
 
         for j in range(size2):
-            part = parts[0][j]
+            part = parts[0][j+1]
             assert part in part_id_to_vocab_id or all_parts_list[int(part/9) - 1] in irregular_exceptions, "part not in part_id_to_vocab_id (%s) [%s]"%(all_parts_list[int(part/9) - 1], int(part) )
 
             buffer.push_back(part)
@@ -2439,7 +2394,7 @@ def load(str path, str name, bint profile=False, bint debug=False):
     openmp.omp_set_lock(&lock)
     cdef unordered_set[int] mapping
     cdef vector[Parts] vector_parts
-    cdef vector[int] vector_part
+    cdef int* vector_part
     cdef Parts parts
     cdef int part
     cdef np.ndarray[np.int32_t, ndim=1] data
@@ -2494,10 +2449,10 @@ def load(str path, str name, bint profile=False, bint debug=False):
             len_part_max = data[k]; k += 1
             size2 = data[k]; k += 1
             
-            vector_part = vector[int]()
-            vector_part.reserve(size2)
+            vector_part = <int*> malloc(sizeof(int)*(size2+1))
+            vector_part[0] = size2
             for j in range(size2):
-                vector_part.push_back(data[k]) 
+                vector_part[j+1] = data[k]
                 k += 1
                 
             #if debug:
@@ -2520,11 +2475,11 @@ def load(str path, str name, bint profile=False, bint debug=False):
         score = (<float>data[k]) / 100; k += 1
         len_part_max = data[k]; k += 1
         size2 = data[k]; k += 1
-        
-        vector_part = vector[int]()
-        vector_part.reserve(size2)
+    
+        vector_part = <int*> malloc(sizeof(int)*(size2+1))
+        vector_part[0] = size2
         for j in range(size2):
-            vector_part.push_back(data[k]) 
+            vector_part[j+1] = data[k]
             k += 1
             
         
@@ -2768,8 +2723,8 @@ def tokenize_word(str word, int max_call_depth = 3, float min_score_ratio = 1.5,
     if max_call_depth < 2:
         max_call_depth = 2
 
-    if return_candidates:
-        return _tokenize_word_candidates(<char *>b_word, length, max_call_depth, min_score_ratio, debug)
+    #if return_candidates:
+    #    return _tokenize_word_candidates(<char *>b_word, length, max_call_depth, min_score_ratio, debug)
 
     cdef vector[int] result_contents = vector[int]()
     result_contents.reserve(8)
@@ -2782,7 +2737,7 @@ def tokenize_word(str word, int max_call_depth = 3, float min_score_ratio = 1.5,
             result_contents[i] = true_part_id_to_vocab_id[result_contents[i]]
     return result_contents
 
-
+'''
 cdef vector[Parts] _tokenize_word_candidates(char* chars, int length, int max_call_depth, float min_score_ratio, bint debug) nogil:
     cdef:
         int i = 0, j = 0
@@ -2817,7 +2772,7 @@ cdef vector[Parts] _tokenize_word_candidates(char* chars, int length, int max_ca
             if results[j][2] == length:
                 cont = False
                 break
-            score = <float>results[j][1] + (<float>results[j][3] / 1000) + results[j][0].size()
+            score = <float>results[j][1] + (<float>results[j][3] / 1000) + results[j][0][0]
             if score > cmp_max_score:
                 cmp_max_score = score
                 i = j
@@ -2852,14 +2807,14 @@ cdef vector[Parts] _tokenize_word_candidates(char* chars, int length, int max_ca
 
 
     return results
+'''
 
-
-cdef Parts _tokenize_word_to_parts(char* chars, int length, vector[Parts]* results, float min_score_ratio, bint debug) nogil:
+cdef int _tokenize_word_to_parts(char* chars, int length, vector[Parts]* results, float min_score_ratio, bint debug) nogil:
     cdef:
         int i = 0, j = 0
         int cursor = 0, size
         vector[vector[Parts]] cache = vector[vector[Parts]]()
-        vector[int] contents = vector[int]()
+        int* contents = <int*> malloc(sizeof(int))
         Parts parts
         int call_depth = 0
         float max_score = -100
@@ -2868,6 +2823,7 @@ cdef Parts _tokenize_word_to_parts(char* chars, int length, vector[Parts]* resul
     for i in range(length+1):
         cache.push_back(vector[Parts]())
 
+    contents[0] = 0
     parts = (contents, 0, 0, 0)
     
     results.reserve(1024)
@@ -2882,11 +2838,11 @@ cdef Parts _tokenize_word_to_parts(char* chars, int length, vector[Parts]* resul
             if score > cmp_max_score:
                 cmp_max_score = score
                 i = j
+
+    
     if results.size() == 0:
-        with gil:
-            print("%s failed to be tokenized"%chars)
-        return parts
-    return results[0][i]
+        return 0
+    return 1
 
 
 
@@ -2895,7 +2851,8 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
         int i = 0, j = 0
         int cursor = 0, size
         vector[vector[Parts]] cache = vector[vector[Parts]]()
-        vector[int] contents = vector[int]()
+        int* contents = <int*> malloc(sizeof(int)*2)
+        int* temp_contents
         Parts parts
         int call_depth = 0
         float max_score = -100
@@ -2906,15 +2863,15 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
 
     for i in range(length+1):
         cache.push_back(vector[Parts]())
-    
+
+    contents[0] = 0
+    parts = (contents, 0, 0, 0)
 
     while cont:
-        parts = (contents, 0, 0, 0)
         results = vector[Parts]()
         results.reserve(1024)
         tokenize_inner(chars, cursor, length, parts, &cache, max_call_depth, &max_score, min_score_ratio, call_depth, &results)
             
-
 
         size = results.size()
         if size == 0:
@@ -2926,7 +2883,7 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
             if results[j][2] == length:
                 cont = False
                 break
-            score = <float>results[j][1] + (<float>results[j][3] / 1000) + results[j][0].size()
+            score = <float>results[j][1] + (<float>results[j][3] / 1000) + results[j][0][0]
             if score > cmp_max_score:
                 cmp_max_score = score
                 i = j
@@ -2934,12 +2891,18 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
         if not cont:
             break
 
-        result_contents.insert(result_contents.end(),results[i][0].begin(),results[i][0].end() - 1)
+        temp_contents = results[i][0]
+            
+        for j in range(temp_contents[0]):
+            result_contents.push_back(temp_contents[j+1])
 
-        contents = vector[int]()
-        contents.push_back(results[i][0][results[i][0].size() - 1])
+        contents[0] = 1
+        contents[1] = temp_contents[temp_contents[0]]
         
         cursor = results[i][2]
+
+        for j in range(size):
+            free(results[j][0])
 
 
     i = -1
@@ -2952,7 +2915,20 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
                 cmp_max_score = score
                 i = j
 
-    result_contents.insert(result_contents.end(),results[i][0].begin(),results[i][0].end())
+    if i >= 0:
+        temp_contents = results[i][0]
+            
+        for j in range(temp_contents[0]):
+            result_contents.push_back(temp_contents[j+1])
+
+    for j in range(size):
+        free(results[j][0])
+    free(contents)
+
+    
+    for i in range(length+1):
+        for j in range(cache[i].size()):
+            free(cache[i][j][0])
 
     if i == -1:
         return 0
@@ -2977,19 +2953,15 @@ cdef void tokenize_inner(
     vector[Parts]* returns) nogil:
 
     cdef:
-        vector[int] contents = parts[0]
-        vector[int] new_contents
-        vector[int]* temp_contents
-        vector[int]* contents_tmp
         float score = parts[1]
         float new_score 
-        int len_contents = contents.size()
         vector[Parts]* cache_value
         vector[Parts]* true_trie_value
         vector[Parts] to_be_cached, ret
         int cache_length
         Parts *temp_parts
         Parts  new_parts
+        int* temp_contents
         int A_part, B_part
         int temp_parts_length
         int i, j, k, m, n, p, _cursor, repeated, A_part_form, B_part_form
@@ -2999,9 +2971,11 @@ cdef void tokenize_inner(
         
     if call_depth > max_call_depth:
         return
+    if cursor >= length:
+        return
 
     # assert cache[0].size() > cursor, "cache[0].size() > cursor"
-    cache_value = &cache[0][cursor]  
+    cache_value = &(cache[0][cursor])
     cache_length = cache_value.size()
 
     if cache_length > 0:
@@ -3050,13 +3024,16 @@ cdef void tokenize_inner(
             # split ends here
             # cursor + len_p == length
             if len_p == len_this or call_depth >= max_call_depth: 
+                temp_contents = <int*> malloc(sizeof(int)*(temp_parts[0][0][0]+1))
+
+                memcpy(temp_contents, temp_parts[0][0], (temp_parts[0][0][0]+1))
+                
                 new_parts = (
-                    temp_parts[0][0],
+                    temp_contents,
                     temp_parts[0][1],
                     cursor+len_p,
                     len_part_max if len_part_max > temp_parts[0][3] else temp_parts[0][3],
                 )
-                to_be_cached.push_back(new_parts)
                 merge_two_parts(
                     &parts,
                     &new_parts,
@@ -3098,9 +3075,7 @@ cdef void tokenize_inner(
                             True,
                             min_score_ratio
                         )
-                        
 
-                        
     repeated = 0
     while True:
         _cursor = cursor+repeated
@@ -3108,15 +3083,18 @@ cdef void tokenize_inner(
             repeated += 1
             continue
         break
+
+    temp_contents = <int*> malloc(sizeof(int)*2)
+    temp_contents[0] = 0
+    new_parts = (temp_contents, 0, 0, 0)
     if repeated > 0:
         pass
     else:
-        new_parts = (vector[int](), 0, 0, 0)
         if true_all_alphabets.find(word[cursor]) != true_all_alphabets.end():
-            new_parts[0].push_back(
-                get_part(true_all_alphabets[word[cursor]], ROOT, MERGE_MODE_BOTH)
-            )
-    if not matched:
+            temp_contents[0] = 1
+            temp_contents[1] = get_part(true_all_alphabets[word[cursor]], ROOT, MERGE_MODE_BOTH)
+            
+    if not matched and False:
         ret = vector[Parts]()
         ret.reserve(1024)
         tokenize_inner(
@@ -3138,10 +3116,6 @@ cdef void tokenize_inner(
         
         if len_ret > 0:
             for k in range(len_ret):
-                temp_parts = &ret[k]
-
-                temp_contents = &(temp_parts[0][0])
-
                 merge_two_parts(
                     &parts,
                     &ret[k],
@@ -3153,7 +3127,7 @@ cdef void tokenize_inner(
                     min_score_ratio
                 )
 
-
+    free(temp_contents)
 
     cache[0][cursor] = to_be_cached
     
@@ -3170,16 +3144,16 @@ cdef void merge_two_parts(
     float min_score_ratio
     ) nogil:
     cdef:
-        vector[int]* A_contents = &(A_parts[0][0])
-        vector[int]* B_contents = &(B_parts[0][0])
-        vector[int]* contents_tmp
+        int* A_contents = A_parts[0][0]
+        int* B_contents = B_parts[0][0]
+        int* contents_tmp
 
         float A_score = A_parts[0][1]
         float B_score = B_parts[0][1]
         float new_score
 
-        int A_length = A_contents[0].size()
-        int B_length = B_contents[0].size()
+        int A_length = A_contents[0]
+        int B_length = B_contents[0]
 
         int A_part, B_part
 
@@ -3192,56 +3166,94 @@ cdef void merge_two_parts(
 
         bint has_root
 
-        vector[int] new_contents
+        int* new_contents
+
+        int extended_length
+
+        int size
 
 
-    if A_length > 0:
-        A_part = A_contents[0][A_length-1]
-        B_part = B_contents[0][0]
-        if adjacent_violate_c(A_part, B_part):
-            return
+        unordered_map[int, Parts].iterator part_id_to_irregular_parts_it
+        
 
     if do_cache:
         to_be_cached[0].push_back(B_parts[0])
 
 
-    new_contents = vector[int]()
+    if A_length > 0:
+        A_part = A_contents[A_length]
+        B_part = B_contents[1]
+        if adjacent_violate_c(A_part, B_part):
+            return
+
+
     new_score = A_score + B_score
     if A_length > 0:
         new_score -= 1
     has_root = False
 
     if call_depth != 0:
-        new_contents.reserve(A_length+B_length)
+        if new_score < max_score[0] * min_score_ratio:
+            return
+
+        new_contents = <int*> malloc(sizeof(int)*(A_length+B_length+1))
+        new_contents[0] = A_length+B_length
+
         for m in range(A_length):
-            new_contents.push_back(A_contents[0][m])
+            new_contents[m+1] = A_contents[m+1]
         for m in range(B_length):
-            new_contents.push_back(B_contents[0][m])
+            new_contents[m+1+A_length] = B_contents[m+1]
         
     else:
         # The final split here, 
-        new_contents.reserve(A_length+B_length+4)
+        extended_length = A_length+B_length+1+8
+        new_contents = <int*> malloc(sizeof(int)*extended_length)
+        new_contents[0] = 0
 
+
+        # need fix rare cases of overflowing
+        #
+        # e.g. size = 5, extended_length = 5  
+        #      ( <size>, <1>, <2>, <3>, <4>   )
+        #
+        # if size >= extended_length:  
+        #     extended_length += 1
+        #     new_contents = <int*> malloc(realloc(int)*extended_length)
+
+        size = 0
         for m in range(A_length):
-            if part_id_to_irregular_parts.find(A_contents[0][m]) == part_id_to_irregular_parts.end():
-                new_contents.push_back(A_contents[0][m])
+            part_id_to_irregular_parts_it = part_id_to_irregular_parts.find(A_contents[m+1])
+            if part_id_to_irregular_parts_it == part_id_to_irregular_parts.end():
+                size += 1
+                if size >= extended_length: extended_length += 1;new_contents = <int*> realloc(new_contents, sizeof(int)*extended_length)
+                new_contents[size] = A_contents[m+1]
             else:
-                contents_tmp = &(part_id_to_irregular_parts[A_contents[0][m]][0])
-                for m in range(contents_tmp.size()):
-                    new_contents.push_back(contents_tmp[0][m])
+                contents_tmp = deref(part_id_to_irregular_parts_it).second[0]
+                for m in range(contents_tmp[0]):
+                    size += 1
+                    if size >= extended_length: extended_length += 1;new_contents = <int*> realloc(new_contents, sizeof(int)*extended_length)
+                    new_contents[size] = (contents_tmp[m+1])
 
         for m in range(B_length):
-            if part_id_to_irregular_parts.find(B_contents[0][m]) == part_id_to_irregular_parts.end():
-                new_contents.push_back(B_contents[0][m])
+            part_id_to_irregular_parts_it = part_id_to_irregular_parts.find(B_contents[m+1])
+            if part_id_to_irregular_parts_it == part_id_to_irregular_parts.end():
+                size += 1
+                if size >= extended_length: extended_length += 1;new_contents = <int*> realloc(new_contents, sizeof(int)*extended_length)
+                new_contents[size] = B_contents[m+1]
             else:
-                contents_tmp = &(part_id_to_irregular_parts[B_contents[0][m]][0])
-                for m in range(contents_tmp.size()):
-                    new_contents.push_back(contents_tmp[0][m])
+                contents_tmp = deref(part_id_to_irregular_parts_it).second[0]
+                for m in range(contents_tmp[0]):
+                    size += 1
+                    if size >= extended_length: extended_length += 1;new_contents = <int*> realloc(new_contents, sizeof(int)*extended_length)
+                    new_contents[size] = (contents_tmp[m+1])
+
+        new_contents[0] = size
+
 
         # Prefer splits that have a root
         # if no root, punish! 
-        for m in range(A_length+B_length):
-            A_part = new_contents[m]
+        for m in range(size):
+            A_part = new_contents[m+1]
             A_part_form = A_part % 3
             if A_part_form == ROOT:
                 has_root = True
@@ -3250,16 +3262,16 @@ cdef void merge_two_parts(
             new_score -= 1
 
         # ends with prefix and start with suffix is not good
-        for m from A_length+B_length-1 >= m >= 0: 
-            A_part = new_contents[m]
+        for m from size-1 >= m >= 0: 
+            A_part = new_contents[m+1]
             A_part_form = A_part % 3
             if A_part_form == PREFIX:
                 new_score -= 1
             elif A_part_form == SUFFIX:
                 continue
             break
-        for m in range(A_length+B_length):
-            A_part = new_contents[m]
+        for m in range(size):
+            A_part = new_contents[m+1]
             A_part_form = A_part % 3
             if A_part_form == SUFFIX:
                 new_score -= 1
@@ -3267,11 +3279,11 @@ cdef void merge_two_parts(
                 continue
             break
 
+        if new_score < max_score[0] * min_score_ratio:
+            return
+
         if new_score > max_score[0]:
             max_score[0] = new_score
-    if new_score < max_score[0] * min_score_ratio:
-        return
-
 
     returns.push_back(
         (new_contents, 
