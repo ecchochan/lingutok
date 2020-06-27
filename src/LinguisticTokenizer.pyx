@@ -2117,10 +2117,8 @@ def make_irregular():
                             &repl_combined[i],
                             &(repl[m]),
                             &repl_combined_temp,
-                            NULL,
                             0 if part_index == len_v else 1,
                             &max_score,
-                            False,
                             1.25
                         )
                         
@@ -2857,7 +2855,8 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
         int call_depth = 0
         float max_score = -100
         bint cont = True
-        float cmp_max_score , score
+        float cmp_max_score
+        float score
         vector[Parts] results
 
 
@@ -2925,11 +2924,9 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
         free(results[j][0])
     free(contents)
 
-    
     for i in range(length+1):
         for j in range(cache[i].size()):
             free(cache[i][j][0])
-
     if i == -1:
         return 0
 
@@ -2984,10 +2981,8 @@ cdef void tokenize_inner(
                 &parts,
                 &(cache_value[0][i]),
                 returns,
-                &to_be_cached,
                 call_depth,
                 max_score,
-                False,
                 min_score_ratio
             )
     
@@ -3019,6 +3014,7 @@ cdef void tokenize_inner(
         # i.e. internal  ->  intern (R),           inter (P),   in (P), in (R), in (S)
         # i.e. reducing  ->  reduce (R) ing (S),   red (R),     re (P)
         for j in range(<int>true_trie_value.size()):
+            # matched = True
             temp_parts = &(true_trie_value[0][j])
 
             # split ends here
@@ -3026,7 +3022,10 @@ cdef void tokenize_inner(
             if len_p == len_this or call_depth >= max_call_depth: 
                 temp_contents = <int*> malloc(sizeof(int)*(temp_parts[0][0][0]+1))
 
-                memcpy(temp_contents, temp_parts[0][0], (temp_parts[0][0][0]+1))
+                for m in range(temp_parts[0][0][0]+1):
+                    temp_contents[m] = temp_parts[0][0][m]
+
+                #memcpy(temp_contents, temp_parts[0][0], (temp_parts[0][0][0]+1))
                 
                 new_parts = (
                     temp_contents,
@@ -3034,14 +3033,14 @@ cdef void tokenize_inner(
                     cursor+len_p,
                     len_part_max if len_part_max > temp_parts[0][3] else temp_parts[0][3],
                 )
+
+                to_be_cached.push_back(new_parts)
                 merge_two_parts(
                     &parts,
                     &new_parts,
                     returns,
-                    &to_be_cached,
                     call_depth,
                     max_score,
-                    True,
                     min_score_ratio
                 )
                 
@@ -3062,20 +3061,17 @@ cdef void tokenize_inner(
                     call_depth+1, 
                     &ret
                 )
-                len_ret = ret.size()
-                if len_ret > 0:
-                    for k in range(len_ret):
-                        merge_two_parts(
-                            &parts,
-                            &ret[k],
-                            returns,
-                            &to_be_cached,
-                            call_depth,
-                            max_score,
-                            True,
-                            min_score_ratio
-                        )
-
+                for k in range(ret.size()):
+                    to_be_cached.push_back(ret[k])
+                    merge_two_parts(
+                        &parts,
+                        &ret[k],
+                        returns,
+                        call_depth,
+                        max_score,
+                        min_score_ratio
+                    )
+    
     repeated = 0
     while True:
         _cursor = cursor+repeated
@@ -3094,7 +3090,7 @@ cdef void tokenize_inner(
             temp_contents[0] = 1
             temp_contents[1] = get_part(true_all_alphabets[word[cursor]], ROOT, MERGE_MODE_BOTH)
             
-    if not matched and False:
+    if not matched or repeated > 0:
         ret = vector[Parts]()
         ret.reserve(1024)
         tokenize_inner(
@@ -3116,14 +3112,13 @@ cdef void tokenize_inner(
         
         if len_ret > 0:
             for k in range(len_ret):
+                to_be_cached.push_back(ret[k])
                 merge_two_parts(
                     &parts,
                     &ret[k],
                     returns,
-                    &to_be_cached,
                     call_depth,
                     max_score,
-                    True,
                     min_score_ratio
                 )
 
@@ -3137,10 +3132,8 @@ cdef void merge_two_parts(
     Parts* A_parts, 
     Parts* B_parts, 
     vector[Parts]* returns, 
-    vector[Parts]* to_be_cached, 
     int call_depth,
     float* max_score, 
-    bint do_cache,
     float min_score_ratio
     ) nogil:
     cdef:
@@ -3176,9 +3169,12 @@ cdef void merge_two_parts(
         unordered_map[int, Parts].iterator part_id_to_irregular_parts_it
         
 
-    if do_cache:
-        to_be_cached[0].push_back(B_parts[0])
-
+    new_score = A_score + B_score
+    if A_length > 0:
+        new_score -= 1
+    if new_score < max_score[0] * min_score_ratio:
+        return
+        
 
     if A_length > 0:
         A_part = A_contents[A_length]
@@ -3186,10 +3182,6 @@ cdef void merge_two_parts(
         if adjacent_violate_c(A_part, B_part):
             return
 
-
-    new_score = A_score + B_score
-    if A_length > 0:
-        new_score -= 1
     has_root = False
 
     if call_depth != 0:
@@ -3205,6 +3197,51 @@ cdef void merge_two_parts(
             new_contents[m+1+A_length] = B_contents[m+1]
         
     else:
+
+    
+        # Prefer splits that have a root
+        # if no root, punish! 
+        for m in range(A_length):
+            A_part_form = A_contents[m+1] % 3
+            if A_part_form == ROOT:
+                has_root = True
+                break
+        if not has_root:
+            for m in range(B_length):
+                A_part_form = B_contents[m+1] % 3
+                if A_part_form == ROOT:
+                    has_root = True
+                    break
+            
+        if not has_root:
+            new_score -= 1
+
+
+        # ends with prefix and start with suffix is not good
+        for m from size-1 >= m >= 0: 
+            A_part_form = A_contents[m+1] if m < A_length else B_contents[m+1 - A_length]
+            if A_part_form == PREFIX:
+                new_score -= 1
+            elif A_part_form == SUFFIX:
+                continue
+            break
+        for m in range(size):
+            A_part_form = A_contents[m+1] if m < A_length else B_contents[m+1 - A_length]
+            if A_part_form == SUFFIX:
+                new_score -= 1
+            elif A_part_form == PREFIX:
+                continue
+            break
+
+        if new_score < max_score[0] * min_score_ratio:
+            return
+
+        if new_score > max_score[0]:
+            max_score[0] = new_score
+
+
+
+
         # The final split here, 
         extended_length = A_length+B_length+1+8
         new_contents = <int*> malloc(sizeof(int)*extended_length)
@@ -3225,65 +3262,42 @@ cdef void merge_two_parts(
             part_id_to_irregular_parts_it = part_id_to_irregular_parts.find(A_contents[m+1])
             if part_id_to_irregular_parts_it == part_id_to_irregular_parts.end():
                 size += 1
-                if size >= extended_length: extended_length += 1;new_contents = <int*> realloc(new_contents, sizeof(int)*extended_length)
+                if size >= extended_length: 
+                    extended_length += 1
+                    new_contents = <int*> realloc(new_contents, sizeof(int)*extended_length)
+                    
                 new_contents[size] = A_contents[m+1]
             else:
                 contents_tmp = deref(part_id_to_irregular_parts_it).second[0]
                 for m in range(contents_tmp[0]):
                     size += 1
-                    if size >= extended_length: extended_length += 1;new_contents = <int*> realloc(new_contents, sizeof(int)*extended_length)
+                    if size >= extended_length: 
+                        extended_length += 1
+                        new_contents = <int*> realloc(new_contents, sizeof(int)*extended_length)
+                        
                     new_contents[size] = (contents_tmp[m+1])
 
         for m in range(B_length):
             part_id_to_irregular_parts_it = part_id_to_irregular_parts.find(B_contents[m+1])
             if part_id_to_irregular_parts_it == part_id_to_irregular_parts.end():
                 size += 1
-                if size >= extended_length: extended_length += 1;new_contents = <int*> realloc(new_contents, sizeof(int)*extended_length)
+                if size >= extended_length: 
+                    extended_length += 1
+                    new_contents = <int*> realloc(new_contents, sizeof(int)*extended_length)
+                    
                 new_contents[size] = B_contents[m+1]
             else:
                 contents_tmp = deref(part_id_to_irregular_parts_it).second[0]
                 for m in range(contents_tmp[0]):
                     size += 1
-                    if size >= extended_length: extended_length += 1;new_contents = <int*> realloc(new_contents, sizeof(int)*extended_length)
+                    if size >= extended_length: 
+                        extended_length += 1
+                        new_contents = <int*> realloc(new_contents, sizeof(int)*extended_length)
+                        
                     new_contents[size] = (contents_tmp[m+1])
 
         new_contents[0] = size
 
-
-        # Prefer splits that have a root
-        # if no root, punish! 
-        for m in range(size):
-            A_part = new_contents[m+1]
-            A_part_form = A_part % 3
-            if A_part_form == ROOT:
-                has_root = True
-                break
-        if not has_root:
-            new_score -= 1
-
-        # ends with prefix and start with suffix is not good
-        for m from size-1 >= m >= 0: 
-            A_part = new_contents[m+1]
-            A_part_form = A_part % 3
-            if A_part_form == PREFIX:
-                new_score -= 1
-            elif A_part_form == SUFFIX:
-                continue
-            break
-        for m in range(size):
-            A_part = new_contents[m+1]
-            A_part_form = A_part % 3
-            if A_part_form == SUFFIX:
-                new_score -= 1
-            elif A_part_form == PREFIX:
-                continue
-            break
-
-        if new_score < max_score[0] * min_score_ratio:
-            return
-
-        if new_score > max_score[0]:
-            max_score[0] = new_score
 
     returns.push_back(
         (new_contents, 
