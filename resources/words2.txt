@@ -2525,7 +2525,7 @@ construe
 consul
 consult
 consume
-cont-,cont
+cont
 contact
 contain
 contemn
@@ -2538,9 +2538,8 @@ contest
 context
 contin
 continue
-contra
-contra-
-contra-,counter-
+contra,contra-
+counter,counter-
 contract
 contradict
 contrast
@@ -2567,8 +2566,7 @@ coper
 copper
 copy
 cor-
-cord
-cord-,cordi-
+cord,cord-,cordi-
 core
 corn,corne
 corner,nook
@@ -2577,17 +2575,16 @@ coron-,corono-,corona,corona-
 coronet,garland,wreath
 corp
 corpor
-corpus-
+corpus
 correct,corrig
 correspond
 corrode
 corrupt
-cortic-,cortico-
+cortic,cortic-,cortico-
 cosmet
 cosmo-,cosmic
 cosmopol
-cost
-cost-
+cost,cost-
 costa,costo-,costal
 costume
 cosy,cozy
@@ -2599,7 +2596,6 @@ could
 council
 counsel
 count
-counter-
 country
 county
 couple
@@ -3331,6 +3327,7 @@ exoter
 expand
 expect
 expede
+expend
 expense
 experi
 expert,maven
@@ -4154,6 +4151,7 @@ ian
 iatr-,iatro-,iatr,-iatr
 iber
 ice
+icosi,icosi-,icosa-
 id
 idea,ideo-,ideo
 ideal
@@ -5077,6 +5075,7 @@ msn
 mu
 mud
 mug
+mule
 multi
 multi-
 multiply

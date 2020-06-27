@@ -2688,7 +2688,7 @@ cdef vector[int]* tokenize_word_auto_c(char* chars, int length, bint use_cache, 
     tokenize_lru_cache.put(cache_key, result_contents)
     openmp.omp_unset_lock(&lock)
     
-    max_call_depth = 4
+    max_call_depth = 5
 
     _tokenize_word(chars, length, result_contents, max_call_depth, MIN_SCORE_RATIO, False)
 
@@ -2709,14 +2709,14 @@ def tokenize_word_auto(str word, bint use_cache=False, bint to_vocab_id=False):
 
 
 
-def tokenize_word(str word, int max_call_depth = 3, float min_score_ratio = 1.5, bint return_candidates = False, bint debug=False, bint to_vocab_id=False):
+def tokenize_word(str word, int max_call_depth = 0, float min_score_ratio = 1.25, bint return_candidates = False, bint debug=False, bint to_vocab_id=False):
     cdef:
         vector[Parts] results
         bytes b_word = word.encode('utf-8')
         int length = len(word)
 
     if max_call_depth == 0:
-        max_call_depth = 4
+        max_call_depth = 5
 
     if max_call_depth < 2:
         max_call_depth = 2
@@ -2825,7 +2825,7 @@ cdef int _tokenize_word_to_parts(char* chars, int length, vector[Parts]* results
     parts = (contents, 0, 0, 0)
     
     results.reserve(1024)
-    tokenize_inner(chars, cursor, length, parts, &cache, 100, &max_score, min_score_ratio, call_depth, results)
+    tokenize_inner(chars, cursor, length, parts, &cache, 100, &max_score, NULL, min_score_ratio, call_depth, results)
 
     i = 0
     cmp_max_score = -100
@@ -2842,18 +2842,20 @@ cdef int _tokenize_word_to_parts(char* chars, int length, vector[Parts]* results
         return 0
     return 1
 
-
+cdef int MAX_SPLIT_DIFF = 1
+cdef int MAX_SPLIT_START = 8
 
 cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, int max_call_depth, float min_score_ratio, bint debug) nogil:
     cdef:
         int i = 0, j = 0
         int cursor = 0, size
         vector[vector[Parts]] cache = vector[vector[Parts]]()
-        int* contents = <int*> malloc(sizeof(int)*2)
+        int* contents = <int*> malloc(sizeof(int)*(length+1))
+        int* min_num_splitted = <int*> malloc(sizeof(int)*(length))
         int* temp_contents
         Parts parts
         int call_depth = 0
-        float max_score = -100
+        float max_score
         bint cont = True
         float cmp_max_score
         float score
@@ -2867,9 +2869,12 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
     parts = (contents, 0, 0, 0)
 
     while cont:
+        for i in range(length):
+            min_num_splitted[i] = 100
+        max_score = -100
         results = vector[Parts]()
         results.reserve(1024)
-        tokenize_inner(chars, cursor, length, parts, &cache, max_call_depth, &max_score, min_score_ratio, call_depth, &results)
+        tokenize_inner(chars, cursor, length, parts, &cache, max_call_depth, &max_score, min_num_splitted, min_score_ratio, call_depth, &results)
             
 
         size = results.size()
@@ -2892,17 +2897,21 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
 
         temp_contents = results[i][0]
             
+        contents[0] = temp_contents[0]
+        
         for j in range(temp_contents[0]):
-            result_contents.push_back(temp_contents[j+1])
+            contents[j+1] = temp_contents[j+1]
 
-        contents[0] = 1
-        contents[1] = temp_contents[temp_contents[0]]
         
         cursor = results[i][2]
 
         for j in range(size):
             free(results[j][0])
 
+        for i in range(length+1):
+            for j in range(cache[i].size()):
+                free(cache[i][j][0])
+            cache[i].clear()
 
     i = -1
     cmp_max_score = -100
@@ -2923,6 +2932,7 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
     for j in range(size):
         free(results[j][0])
     free(contents)
+    free(min_num_splitted)
 
     for i in range(length+1):
         for j in range(cache[i].size()):
@@ -2945,6 +2955,7 @@ cdef void tokenize_inner(
     vector[vector[Parts]]* cache,
     int max_call_depth, 
     float* max_score, 
+    int* min_num_splitted,
     float min_score_ratio, 
     int call_depth,
     vector[Parts]* returns) nogil:
@@ -2965,6 +2976,7 @@ cdef void tokenize_inner(
         vector[int] prefixes_ids
         int len_this, len_ret, len_p, len_p_part_max, len_part_max = parts[3]
         bint has_root
+        bint check_min_num_splitted = min_num_splitted != NULL and length - cursor > MAX_SPLIT_START
         
     if call_depth > max_call_depth:
         return
@@ -3020,9 +3032,17 @@ cdef void tokenize_inner(
             # split ends here
             # cursor + len_p == length
             if len_p == len_this or call_depth >= max_call_depth: 
-                temp_contents = <int*> malloc(sizeof(int)*(temp_parts[0][0][0]+1))
+                temp_parts_length = temp_parts[0][0][0]
 
-                for m in range(temp_parts[0][0][0]+1):
+                if check_min_num_splitted:
+                    if temp_parts_length < min_num_splitted[cursor]:
+                        min_num_splitted[cursor] = temp_parts_length
+                    elif temp_parts_length - min_num_splitted[cursor] > MAX_SPLIT_DIFF:
+                        continue
+
+                temp_contents = <int*> malloc(sizeof(int)*(temp_parts_length+1))
+
+                for m in range(temp_parts_length+1):
                     temp_contents[m] = temp_parts[0][0][m]
 
                 #memcpy(temp_contents, temp_parts[0][0], (temp_parts[0][0][0]+1))
@@ -3057,11 +3077,20 @@ cdef void tokenize_inner(
                     cache, 
                     max_call_depth, 
                     max_score,
+                    min_num_splitted,
                     min_score_ratio,
                     call_depth+1, 
                     &ret
                 )
                 for k in range(ret.size()):
+                    temp_parts_length = ret[k][0][0]
+                    if check_min_num_splitted:
+                        if temp_parts_length < min_num_splitted[cursor]:
+                            min_num_splitted[cursor] = temp_parts_length
+                        elif temp_parts_length - min_num_splitted[cursor] > MAX_SPLIT_DIFF:
+                            free(ret[k][0])
+                            continue
+
                     to_be_cached.push_back(ret[k])
                     merge_two_parts(
                         &parts,
@@ -3101,6 +3130,7 @@ cdef void tokenize_inner(
             cache, 
             max_call_depth, 
             max_score,
+            min_num_splitted,
             min_score_ratio,
             call_depth+1, 
             &ret
@@ -3112,6 +3142,13 @@ cdef void tokenize_inner(
         
         if len_ret > 0:
             for k in range(len_ret):
+                temp_parts_length = ret[k][0][0]
+                if check_min_num_splitted:
+                    if temp_parts_length < min_num_splitted[cursor]:
+                        min_num_splitted[cursor] = temp_parts_length
+                    elif temp_parts_length - min_num_splitted[cursor] > MAX_SPLIT_DIFF:
+                        free(ret[k][0])
+                        continue
                 to_be_cached.push_back(ret[k])
                 merge_two_parts(
                     &parts,
@@ -3185,8 +3222,6 @@ cdef void merge_two_parts(
     has_root = False
 
     if call_depth != 0:
-        if new_score < max_score[0] * min_score_ratio:
-            return
 
         new_contents = <int*> malloc(sizeof(int)*(A_length+B_length+1))
         new_contents[0] = A_length+B_length
