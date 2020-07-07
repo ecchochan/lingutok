@@ -139,6 +139,7 @@ cdef extern from "<unordered_map>" namespace "std":
         unordered_map(unordered_map&) nogil
         U& operator[](T&) nogil
         U& at(T&) nogil
+        size_t erase(T&) nogil
         iterator find(T&) nogil 
         iterator begin() nogil
         iterator end() nogil
@@ -1576,7 +1577,8 @@ cdef unordered_map[long, int] prefixes_max_part_lengths
 
 cdef unordered_map[int, int] true_part_id_to_vocab_id
 
-cdef unordered_map[int, vector[Parts]] true_trie_values
+cdef unordered_map[int, Parts*] true_trie_values
+cdef unordered_map[int, int] true_trie_values_length
 cdef unordered_map[int, Parts] part_id_to_irregular_parts
 cdef unordered_map[int, int] true_prefixes_lengths
 
@@ -1681,7 +1683,7 @@ def gen(bint debug=False):
         bucket.push_back((vec_part, 0, 0, len(e)))
         prefixes_lengths[key] = prefixes_max_part_lengths[key] = len(e)
         assert len(e) > 0
-        assert trie_values[key].size() > 0
+        assert trie_values[key].size() > 0, e
         yield e.encode('utf-8')
         
 
@@ -1716,7 +1718,7 @@ def gen(bint debug=False):
         bucket.push_back((vec_part, -ROOT_PUNISHMENT, 0, len(e)))
         prefixes_lengths[key] = prefixes_max_part_lengths[key] = len(e)
         assert len(e) > 0
-        assert trie_values[key].size() > 0
+        assert trie_values[key].size() > 0, e
         yield e.encode('utf-8')
             
 
@@ -1749,6 +1751,7 @@ def gen(bint debug=False):
         bucket.push_back((vec_part, ret.score - 1, 0, ret.longest_length))
         prefixes_max_part_lengths[ret.key] = ret.longest_length
         prefixes_lengths[ret.key] = ret.morphed_length
+        assert trie_values[ret.key].size() > 0, e
         yield (<bytes>ret.morphed)
         
     print('Processing morphed_roots_merge_suffixes')
@@ -1770,6 +1773,7 @@ def gen(bint debug=False):
         
         prefixes_max_part_lengths[ret.key] = ret.longest_length
         prefixes_lengths[ret.key] = ret.morphed_length
+        assert trie_values[ret.key].size() > 0, e
         yield (<bytes>ret.morphed)
 
     cdef ABCResult ABC_result
@@ -1800,6 +1804,7 @@ def gen(bint debug=False):
         prefixes_lengths[ret2.key] = ret2.morphed_length
         yield (<bytes>ret2.morphed)
         free(stay_alive[stay_alive.size()-1])
+        assert trie_values[ret2.key].size() > 0
         stay_alive.pop_back()
         
     print('Loading morphed_roots_merge_suffixes mix morphed_suffixes_merge_suffixes')
@@ -1830,6 +1835,7 @@ def gen(bint debug=False):
         yield (<bytes>ret2.morphed)
         free(stay_alive[stay_alive.size()-1])
         stay_alive.pop_back()
+        assert trie_values[ret2.key].size() > 0
 
 
 
@@ -2065,6 +2071,7 @@ def make_irregular():
         bytes b_part
         int trie_id, part_id, i, m
         vector[Parts] repl, repl_combined, repl_combined_temp
+        Parts* repl_ptr
         int len_contents
         Parts *temp_parts
         Parts parts
@@ -2095,16 +2102,21 @@ def make_irregular():
             continue
         for part in v:  
             part_index += 1
+            repl = vector[Parts]()
             try:
                 trie_id = trie_obj[part]
                 assert trie_id < true_trie_values.size(), 'true_trie_values size ? %s'%((k, v),)
-                repl = true_trie_values[trie_id]
+                repl_ptr = true_trie_values[trie_id]
+                assert true_trie_values_length[trie_id] > 0, 'true_trie_values_length[%s] size?'%trie_id
+                for i in range(true_trie_values_length[trie_id]):
+                    repl.push_back(repl_ptr[i])
                 free_results = False
             except:
-                repl = vector[Parts]()
                 b_part = part.encode('utf8')
-                _tokenize_word_to_parts(<char*>b_part, len(b_part), &repl, MIN_SCORE_RATIO, False)
+                assert _tokenize_word_to_parts(<char*>b_part, len(b_part), &repl, MIN_SCORE_RATIO, False) > 0, "parts no result: "+ part
                 free_results = True
+
+            assert repl.size() > 0, "parts no result: "+ part
                 
             if repl_combined.size() == 0:
                 for i in range(repl.size()):
@@ -2119,18 +2131,18 @@ def make_irregular():
                             &repl_combined_temp,
                             0 if part_index == len_v else 1,
                             &max_score,
-                            1.25
+                            99
                         )
                         
                 repl_combined = repl_combined_temp
-            if free_results:
+            if free_results and False:
                 for m in range(repl.size()):
                     free(repl[m][0])
                 
             
         i = 0
         cmp_max_score = -100
-        assert repl_combined.size() > 0, 'repl_combined size ? %s'%((k, v),)
+        assert repl_combined.size() > 0, 'repl_combined size .. ? %s'%((k, v),)
 
         for j in range(repl_combined.size()):
             score = <float>repl_combined[j][1] + (<float>repl_combined[j][3] / 1000)
@@ -2146,11 +2158,11 @@ def make_irregular():
 
 
 def true_trie_values_to_np():
-    cdef unordered_map[int, vector[Parts]].iterator it = true_trie_values.begin()
-    cdef unordered_map[int, vector[Parts]].iterator end = true_trie_values.end()
+    cdef unordered_map[int, Parts*].iterator it = true_trie_values.begin()
+    cdef unordered_map[int, Parts*].iterator end = true_trie_values.end()
         
     cdef int key, i, j, size, size2
-    cdef vector[Parts] vector_parts
+    cdef Parts* vector_parts
     cdef Parts parts
     cdef int part
     cdef vector[np.int32_t] buffer
@@ -2161,18 +2173,20 @@ def true_trie_values_to_np():
     while it != end:
         key = deref(it).first
         vector_parts = deref(it).second
-        size = vector_parts.size()
+        size = true_trie_values_length[key]
 
-        assert size > 0, "% zero size (:1)"%key
+        assert size > 0, "1 %s zero size (:1)"%trie_obj.restore_key(key)
 
         buffer.push_back(key)
         buffer.push_back(size)
 
 
         for i in range(size):
+            # true_trie_values[k][i]
             parts = vector_parts[i]
             size2 = parts[0][0]
-            assert size2 > 0, "% zero size (:2)"%key
+            assert size2 > 0, "2 %s zero size (:2)"%trie_obj.restore_key(key)
+            assert size2 < 1000, "2 %s large size (:2!!)"%trie_obj.restore_key(key)
 
             if size2 == 1 and parts[0][1]%3 == ROOT:
                 assert parts[1] < 0
@@ -2201,7 +2215,7 @@ def true_trie_values_to_np():
         buffer.push_back(key)
 
         size2 = parts[0][0]
-        assert size2 > 0, "% zero size (:2)"%key
+        assert size2 > 0, "3 %s zero size (:2)"%key
 
         if size2 == 1 and parts[0][1]%3 == ROOT:
             assert parts[1] < 0
@@ -2301,12 +2315,15 @@ cdef Trie trie_obj = Trie()
 
 def generate_trie(str path, str name, bint debug=False):
     global stay_alive, trie_obj
-    cdef int i 
+    cdef int i, size, size2
 
     load_data(debug=debug) 
 
     cdef int trie_id
     cdef long key
+    cdef Parts* parts_ptr
+    cdef Parts* vector_parts
+    cdef Parts parts
 
     trie_obj = Trie(gen(debug=debug))
     
@@ -2319,13 +2336,15 @@ def generate_trie(str path, str name, bint debug=False):
 
     cdef unordered_map[long, vector[Parts]].iterator it = trie_values.begin()
     cdef unordered_map[long, vector[Parts]].iterator end = trie_values.end()
-    cdef int size
     cdef vector[Parts] val
     while it != end:
         key = deref(it).first
         val = deref(it).second
         assert val.size() > 0, "trie_values"
-        assert trie_values[key].size() > 0, "trie_values!"
+        for i in range(val.size()):
+            assert val[i][0][0] > 0, "~???? %s zero size"%key
+
+            assert val[i][0][0] < 1000, "~???? %s large size"%key
 
         inc(it)
 
@@ -2340,9 +2359,21 @@ def generate_trie(str path, str name, bint debug=False):
         if trie_values.find(key) == trie_values.end():
             raise Exception('key `%s` not found: %r'%(key, e.decode()))
             
-        assert trie_values[key].size() > 0, "trie_values 2" 
-        true_trie_values[trie_id] = trie_values[key]
-        assert true_trie_values[trie_id].size() > 0, "true_trie_values"
+        size = trie_values[key].size()
+        assert size > 0, "trie_values 2" 
+        true_trie_values_length[trie_id] = size
+        parts_ptr = <Parts*>malloc(sizeof(Parts)*size )
+        for i in range(size):
+            parts_ptr[i] = trie_values[key][i]
+        true_trie_values[trie_id] = parts_ptr
+
+        
+        for i in range(val.size()):
+            assert val[i][0][0] > 0, "???? %s zero size"%key
+
+        # trie_values.erase(key)
+
+        # assert true_trie_values[trie_id].size() > 0, "true_trie_values"
 
     cdef unordered_map[long, int].iterator it2 = prefixes_lengths.begin()
     cdef unordered_map[long, int].iterator end2 = prefixes_lengths.end()
@@ -2354,6 +2385,23 @@ def generate_trie(str path, str name, bint debug=False):
 
         inc(it2)
 
+
+    cdef unordered_map[int, Parts*].iterator it3 = true_trie_values.begin()
+    cdef unordered_map[int, Parts*].iterator end3 = true_trie_values.end()
+
+    while it3 != end3:
+        key = deref(it3).first
+        vector_parts = deref(it3).second
+        size = true_trie_values_length[key]
+
+        for i in range(size):
+            parts = vector_parts[i]
+            size2 = parts[0][0]
+            assert size2 > 0, "2 %s zero size (:2!!)"%trie_obj.restore_key(key)
+
+            assert size2 < 1000, "2 %s large size (:2!!)"%trie_obj.restore_key(key)
+
+        inc(it3)
 
 
     for key, v in part_id_to_vocab_id.items():
@@ -2391,9 +2439,8 @@ def load(str path, str name, bint profile=False, bint debug=False):
     global all_parts_list, loaded
     openmp.omp_set_lock(&lock)
     cdef unordered_set[int] mapping
-    cdef vector[Parts] vector_parts
+    cdef Parts* vector_parts
     cdef int* vector_part
-    cdef Parts parts
     cdef int part
     cdef np.ndarray[np.int32_t, ndim=1] data
     cdef np.int32_t[::1] view 
@@ -2439,8 +2486,8 @@ def load(str path, str name, bint profile=False, bint debug=False):
         size = data[k]
         k += 1
     
-        vector_parts = vector[Parts]()
-        vector_parts.reserve(size)
+        vector_parts = <Parts*> malloc(sizeof(Parts)*(size))
+        true_trie_values_length[trie_id] = size
 
         for i in range(size):
             score = (<float>data[k]) / 100; k += 1
@@ -2456,9 +2503,7 @@ def load(str path, str name, bint profile=False, bint debug=False):
             #if debug:
             #    print(' '.join((all_parts_list[e//9-1]+' (%s)'%(FORMS[e%3])   ) for e in vector_part) +  'score: %s'%( score))
             
-            parts = (vector_part, score, 0, len_part_max)
-        
-            vector_parts.push_back(parts)
+            vector_parts[i] = (vector_part, score, 0, len_part_max)
         
         true_trie_values[trie_id] = vector_parts
         
@@ -2481,8 +2526,7 @@ def load(str path, str name, bint profile=False, bint debug=False):
             k += 1
             
         
-        parts = (vector_part, score, 0, len_part_max)
-        part_id_to_irregular_parts[part_id] = parts
+        part_id_to_irregular_parts[part_id] = (vector_part, score, 0, len_part_max)
 
     assert size == <int>part_id_to_irregular_parts.size(), "part_id_to_irregular_parts size mismatch. Got %s, should be %s"%(part_id_to_irregular_parts.size(), size)
 
@@ -2964,7 +3008,7 @@ cdef void tokenize_inner(
         float score = parts[1]
         float new_score 
         vector[Parts]* cache_value
-        vector[Parts]* true_trie_value
+        Parts* true_trie_value
         vector[Parts] to_be_cached, ret
         int cache_length
         Parts *temp_parts
@@ -3020,14 +3064,14 @@ cdef void tokenize_inner(
         len_p = true_prefixes_lengths[p]
         
         matched = True
-        true_trie_value = &true_trie_values[p]
+        true_trie_value = true_trie_values[p]
 
         # iterate the possible parts
         # i.e. internal  ->  intern (R),           inter (P),   in (P), in (R), in (S)
         # i.e. reducing  ->  reduce (R) ing (S),   red (R),     re (P)
-        for j in range(<int>true_trie_value.size()):
+        for j in range(true_trie_values_length[p]):
             # matched = True
-            temp_parts = &(true_trie_value[0][j])
+            temp_parts = &(true_trie_value[j])
 
             # split ends here
             # cursor + len_p == length
