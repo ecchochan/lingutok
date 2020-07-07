@@ -890,7 +890,7 @@ cdef int iter_unicode(const unsigned char[:] chars, vector[int]* bucket, bint ke
         # Normalize some unicode
         if replacements.find(code) != replacements.end():
             repl = replacements[code]+1
-            repl_size = repl[-1]
+            repl_size = repl[-1] # -1 is correct -.-
             
         else:
             repl = &code
@@ -2098,13 +2098,19 @@ def make_irregular():
             try:
                 trie_id = trie_obj[part]
                 assert trie_id < true_trie_values.size(), 'true_trie_values size ? %s'%((k, v),)
-                repl = true_trie_values[trie_id]
-                free_results = False
+                repl = vector[Parts]()
+                for i in range(true_trie_values[trie_id].size()):
+                    temp_parts = &(true_trie_values[trie_id][i])
+                    contents = <int*> malloc(sizeof(int)*(temp_parts[0][0][0]+1))
+                    for m in range(temp_parts[0][0][0]+1):
+                        contents[m] = temp_parts[0][0][m]
+                    repl.push_back((contents, temp_parts[0][1], temp_parts[0][2], temp_parts[0][3]))
+
             except:
                 repl = vector[Parts]()
                 b_part = part.encode('utf8')
-                _tokenize_word_to_parts(<char*>b_part, len(b_part), &repl, MIN_SCORE_RATIO, False)
-                free_results = True
+                _tokenize_word_to_parts(<char*>b_part, len(b_part), &repl, 999, False)
+                assert repl.size() > 0, 'repl size ? %s'%((k, v),)
                 
             if repl_combined.size() == 0:
                 for i in range(repl.size()):
@@ -2113,21 +2119,23 @@ def make_irregular():
                 repl_combined_temp = vector[Parts]()
                 for i in range(repl_combined.size()):
                     for m in range(repl.size()):
+                        # alloc memory to `repl_combined_temp`
                         merge_two_parts(
                             &repl_combined[i],
                             &(repl[m]),
                             &repl_combined_temp,
-                            0 if part_index == len_v else 1,
+                            1,
                             &max_score,
-                            1.25
+                            999
                         )
-                        
+                    free(repl_combined[i][0])
+                                
+                assert repl_combined_temp.size() > 0, 'repl_combined_temp size ? %s'%((k, v),)
                 repl_combined = repl_combined_temp
-            if free_results:
+                
                 for m in range(repl.size()):
                     free(repl[m][0])
-                
-            
+                    
         i = 0
         cmp_max_score = -100
         assert repl_combined.size() > 0, 'repl_combined size ? %s'%((k, v),)
@@ -3251,6 +3259,7 @@ cdef void merge_two_parts(
         if not has_root:
             new_score -= 1
 
+        size = A_length + B_length
 
         # ends with prefix and start with suffix is not good
         for m from size-1 >= m >= 0: 
