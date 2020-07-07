@@ -2106,15 +2106,16 @@ def make_irregular():
             try:
                 trie_id = trie_obj[part]
                 assert trie_id < true_trie_values.size(), 'true_trie_values size ? %s'%((k, v),)
-                repl_ptr = true_trie_values[trie_id]
-                assert true_trie_values_length[trie_id] > 0, 'true_trie_values_length[%s] size?'%trie_id
                 for i in range(true_trie_values_length[trie_id]):
-                    repl.push_back(repl_ptr[i])
-                free_results = False
+                    temp_parts = &(true_trie_values[trie_id][i])
+                    contents = <int*> malloc(sizeof(int)*(temp_parts[0][0][0]+1))
+                    for m in range(temp_parts[0][0][0]+1):
+                        contents[m] = temp_parts[0][0][m]
+                    repl.push_back((contents, temp_parts[0][1], temp_parts[0][2], temp_parts[0][3]))
             except:
                 b_part = part.encode('utf8')
-                assert _tokenize_word_to_parts(<char*>b_part, len(b_part), &repl, MIN_SCORE_RATIO, False) > 0, "parts no result: "+ part
-                free_results = True
+                _tokenize_word_to_parts(<char*>b_part, len(b_part), &repl, 999, False)
+                assert repl.size() > 0, 'repl size ? %s'%((k, v),)
 
             assert repl.size() > 0, "parts no result: "+ part
                 
@@ -2129,16 +2130,16 @@ def make_irregular():
                             &repl_combined[i],
                             &(repl[m]),
                             &repl_combined_temp,
-                            0 if part_index == len_v else 1,
+                            1,
                             &max_score,
-                            99
+                            999
                         )
+                    free(repl_combined[i][0])
                         
+                assert repl_combined_temp.size() > 0, 'repl_combined_temp size ? %s'%((k, v),)
                 repl_combined = repl_combined_temp
-            if free_results and False:
                 for m in range(repl.size()):
                     free(repl[m][0])
-                
             
         i = 0
         cmp_max_score = -100
@@ -2869,7 +2870,7 @@ cdef int _tokenize_word_to_parts(char* chars, int length, vector[Parts]* results
     parts = (contents, 0, 0, 0)
     
     results.reserve(1024)
-    tokenize_inner(chars, cursor, length, parts, &cache, 100, &max_score, NULL, min_score_ratio, call_depth, results)
+    tokenize_inner(chars, cursor, length, parts, &cache, 100, &max_score, NULL, min_score_ratio, call_depth, results, debug)
 
     i = 0
     cmp_max_score = -100
@@ -2918,7 +2919,7 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
         max_score = -100
         results = vector[Parts]()
         results.reserve(1024)
-        tokenize_inner(chars, cursor, length, parts, &cache, max_call_depth, &max_score, min_num_splitted, min_score_ratio, call_depth, &results)
+        tokenize_inner(chars, cursor, length, parts, &cache, max_call_depth, &max_score, min_num_splitted, min_score_ratio, call_depth, &results, debug)
             
 
         size = results.size()
@@ -3002,7 +3003,8 @@ cdef void tokenize_inner(
     int* min_num_splitted,
     float min_score_ratio, 
     int call_depth,
-    vector[Parts]* returns) nogil:
+    vector[Parts]* returns,
+    bint debug) nogil:
 
     cdef:
         float score = parts[1]
@@ -3072,6 +3074,12 @@ cdef void tokenize_inner(
         for j in range(true_trie_values_length[p]):
             # matched = True
             temp_parts = &(true_trie_value[j])
+            if debug:
+                with gil:
+                    print(' '*call_depth + '>> '+ ' '.join(
+                        [all_parts_list[temp_parts[0][0][m+1]//9-1]+' (%s)'%FORMS[temp_parts[0][0][m+1]%3] 
+                        for m in range(temp_parts[0][0][0])]
+                        ))
 
             # split ends here
             # cursor + len_p == length
@@ -3124,7 +3132,8 @@ cdef void tokenize_inner(
                     min_num_splitted,
                     min_score_ratio,
                     call_depth+1, 
-                    &ret
+                    &ret,
+                    debug
                 )
                 for k in range(ret.size()):
                     temp_parts_length = ret[k][0][0]
@@ -3177,7 +3186,8 @@ cdef void tokenize_inner(
             min_num_splitted,
             min_score_ratio,
             call_depth+1, 
-            &ret
+            &ret,
+            debug
         )
 
         # below are copied from above
