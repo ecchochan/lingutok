@@ -454,18 +454,6 @@ cdef class _Trie:
         ag.set_query(b_prefix, len(b_prefix))
         return self._trie.predictive_search(ag)
 
-
-cdef class _UnicodeKeyedTrie(_Trie):
-    """
-    MARISA-trie wrapper for unicode keys.
-    """
-    cdef bytes _encode_key(self, key):
-        return key.encode('utf8')
-
-    cdef _get_key(self, agent.Agent& ag):
-        return <unicode>_Trie._get_key(self, ag).decode('utf8')
-
-
 cdef class Trie(_Trie):
     """A trie mapping unicode keys to auto-generated unique IDs."""
 
@@ -587,12 +575,6 @@ cdef class Trie(_Trie):
 
 
 
-
-
-
-
-
-
 cdef int MERGE_MODE_NORMAL = 0
 cdef int MERGE_MODE_BOTH   = 1
 cdef int MERGE_MODE_SINGLE = 2
@@ -601,78 +583,12 @@ cdef int PREFIX = 0
 cdef int ROOT = 1
 cdef int SUFFIX = 2
     
-'''
-cdef class Part():
-    cdef int contents
-    cdef int form
-    cdef bint merge_mode
-
-    def __init__(self, contents, form, merge_mode):
-        self.contents = contents
-        self.form = form
-        self.merge_mode = merge_mode
-    
-cdef class ():
-    cdef list contents
-    cdef float score
-
-    def __init__(self, contents, score):
-        self.contents = contents
-        self.score = score
-'''
-
-    
-    
 
 cdef float ROOT_PUNISHMENT = 0.5
-
-'''
-    e = 'abs'
-    key = hash_string(e)                      # The key from the prefix
-    bucket = get_bucket(key)
-    bucket.push_back((vec_part, 0))
-    trie_values[key] = bucket                 # what we want from prefixes
-
-    ...
-
-    for e in trie.prefixes('absolutely'):
-        key = hash_string(e.decode())
-        tire_key = tire._key_id(e.decode())   
-
-
-    ...
-
-    #  cdef vector[int] _prefixes_id(self, bytes key):
-
-    cdef vector[int] prefixes_in_trie_ids = trie._prefixes_id('absolutely')
-
-    cdef int trie_id
-    for i in range(<int>prefixes_in_trie_ids.size()):
-        trie_id = prefixes_in_trie_ids[i]     # Trie internal id
-
-    ...
-
-    
-    cdef unordered_map[int, vector[Parts]] true_trie_values
-
-
-    for e in trie:
-        key = hash_string(e.decode())
-        trie_id = trie[e]
-        true_trie_values[trie_id] = trie_values[key]
-
-
-
-'''
 
 
 ctypedef (int*, float, int,  int          ) Parts
 #           part_ids    score  last  len_part_max
-
-
-
-
-
 
 
 
@@ -689,11 +605,11 @@ def get_file(x):
     return resource_filename(package_name, 'resources/' + x)
 
 
+cdef int SPECIAL_TOKEN_PAD  = 0
+cdef int SPECIAL_TOKEN_UNK  = 1
 cdef int SPECIAL_TOKEN_CLS  = 2
 cdef int SPECIAL_TOKEN_SEP  = 3
 cdef int SPECIAL_TOKEN_MASK = 5
-cdef int SPECIAL_TOKEN_PAD  = 0
-cdef int SPECIAL_TOKEN_UNK  = 1
 cdef int SPECIAL_TOKEN_NL   = 10
 
 cdef unordered_map[int, int*] replacements
@@ -733,160 +649,225 @@ for k, v in custom_mapping.items():
 
 
 
+from libcpp cimport bool
+cdef class Encoded:
+    cdef readonly vector[int] part_ids
+    cdef vector[int] _ids
+    cdef readonly vector[bool] casing
+    cdef readonly vector[int] offsets
+
+    def __init__(self):
+        self.part_ids = vector[int]()
+        self._ids = vector[int]()
+        self.casing = vector[bool]()
+        self.offsets = vector[int]()
+        pass
+
+    cdef make_ids(self):
+        cdef int i
+        if self._ids.size() == 0:
+            self._ids.reserve(self.part_ids.size())
+            for i in range(self.part_ids.size()):
+                if true_part_id_to_vocab_id.find(self.part_ids[i]) == true_part_id_to_vocab_id.end():
+                    return
+                self._ids.push_back(true_part_id_to_vocab_id[self.part_ids[i]])
+
+    @property
+    def length(self):
+        return self.part_ids.size()
+
+    @property
+    def size(self):
+        return self.part_ids.size()
+
+    @property
+    def ids(self):
+        self.make_ids()
+        return self._ids
+
+    def __str__(self):
+        return ' '.join((all_parts_list[e//9-1]+' (%s)'%FORMS[e%3]   ) for e in self.part_ids)
+
+    def __repr__(self):
+        return "Encoded(%r)" % (repr(self.__str__()))
 
 
-
-
-'''
-# Embedded in iter_unicode
-
-SPECIAL_TOKENS = {
-    '<s>',
-    '</s>',
-    '<mask>',
-    '<pad>',
-    '<unk>',
-    '<nl>',
-}
-'''
-cdef int _2_6 = 2**6
-cdef int _2_12 = 2**12
-cdef int _2_18 = 2**18
-cdef int iter_unicode(const unsigned char[:] chars, vector[int]* bucket, bint keep_nl) nogil:
+cdef int iter_unicode(char* chars, 
+                      size_t length, 
+                      vector[int]* bucket, 
+                      vector[bool]* bucket_case, 
+                      vector[int]* offsets, 
+                      bint keep_nl) nogil:
     cdef:
-        size_t length = chars.shape[0]
         unsigned char lb, last_lb = 0
-        size_t cursor = 0, repl_size, i,  en_char_length
-        char size = 0
+        size_t cursor = 0, repl_size, i, j, en_char_length = 0, prev_cursor
+        unsigned char size = 0, c
         int code
         int* repl
-        
+        vector[int]* tokenized_result
+        char* temp_chars
+        bint save_cased = bucket_case != NULL
+        bint save_offsets = offsets != NULL
         size_t cased_count = 0
         
     bucket.reserve(length)
+    if save_cased:
+        bucket_case.reserve(length)
+    if save_offsets:
+        offsets.reserve(length)
+
         
-    while cursor < length:
-        lb = chars[cursor]
-        if (lb - 0xc2) > (0xf4-0xc2):
-            return -1
-        if lb < 0x80:
+    while True:
+        if cursor >= length:
+            lb = 32
             size = 1
             code = lb
-            
-            if last_lb == 60: # '<' 
-                # check <s>
-                if lb == 115 and length - cursor >= 2:  # 3 - 1
-                    if (
-                        chars[cursor+1] == 62   # >
-                    ): 
-                        bucket.pop_back() # remove '<'
-                        bucket.push_back(SPECIAL_TOKEN_CLS)
-                        size = 2  # 3 - 1
-                        cursor += size
-                        last_lb = 0
-                        continue
-                     
-                # check </s>
-                elif lb == 47 and length - cursor >= 3:  # 4 - 1
-                    if (
-                        chars[cursor+1] == 115 and  # s
-                        chars[cursor+2] == 62       # >
-                    ): 
-                        bucket.pop_back() # remove '<'
-                        bucket.push_back(SPECIAL_TOKEN_SEP)
-                        size = 3  # 4 - 1
-                        cursor += size
-                        last_lb = 0
-                        continue
-                        
-                # check <mask>  (109, 97, 115, 107)
-                elif lb == 109 and length - cursor >= 5:  # 6 - 1
-                    if (
-                        chars[cursor+1] == 97 and   # a
-                        chars[cursor+2] == 115 and  # s
-                        chars[cursor+3] == 107 and  # k
-                        chars[cursor+4] == 62       # >
-                    ): 
-                        bucket.pop_back() # remove '<'
-                        bucket.push_back(SPECIAL_TOKEN_MASK)
-                        size = 5  # 6 - 1
-                        cursor += size
-                        last_lb = 0
-                        continue
-                    
-                # check <pad>  (112, 97, 100)
-                elif lb == 112 and length - cursor >= 4:  # 5 - 1
-                    if (
-                        chars[cursor+1] == 97 and   # a
-                        chars[cursor+2] == 100 and  # d
-                        chars[cursor+3] == 62       # >
-                    ): 
-                        bucket.pop_back() # remove '<'
-                        bucket.push_back(SPECIAL_TOKEN_PAD)
-                        size = 4  # 5 - 1
-                        cursor += size
-                        last_lb = 0
-                        continue
-                    
-                # check <unk>  (117, 110, 107)
-                elif lb == 117 and length - cursor >= 4:  # 5 - 1
-                    if (
-                        chars[cursor+1] == 110 and   # a
-                        chars[cursor+2] == 107 and  # d
-                        chars[cursor+3] == 62       # >
-                    ): 
-                        bucket.pop_back() # remove '<'
-                        bucket.push_back(SPECIAL_TOKEN_UNK)
-                        size = 4  # 5 - 1
-                        cursor += size
-                        last_lb = 0
-                        continue
-                    
-                # check <nl>  (110, 108)
-                elif lb == 110 and length - cursor >= 3:  # 4 - 1
-                    if (
-                        chars[cursor+1] == 108 and   # l
-                        chars[cursor+2] == 62        # >
-                    ): 
-                        bucket.pop_back() # remove '<'
-                        bucket.push_back(SPECIAL_TOKEN_NL)
-                        size = 3  # 4 - 1
-                        cursor += size
-                        last_lb = 0
-                        continue
-                    
-            
-        elif lb < 0xE0:
-            size = 2
-            if cursor + size > length:
-                return -1
-            
-            #code = (a & 0b00000111)*2**6  + (b & 0b00111111)
-            #code = (lb & 0b00000111)*_2_6 + (chars[cursor+1] & 0b00111111)
-            code = ((lb & 0x1f)<<6) | (chars[cursor+1] & 0x3f)
-            
-            
-        elif lb < 0xF0:
-            size = 3
-            if cursor + size > length:
-                return -1
-            
-            #code = (a & 0b00000111)*2**12  + (b & 0b00111111) * 2**6 + (c & 0b00111111 )
-            #code = (lb & 0b00000111)*_2_12 + (chars[cursor+1] & 0b00111111)*_2_6 + (chars[cursor+2] & 0b00111111)
-            code = ((lb & 0xf)<<12) | ((chars[cursor+1] & 0x3f)<<6) | (chars[cursor+2] & 0x3f);
-            
-        elif ( lb & 0xF8 ) == 0xF0:
-            size = 4
-            if cursor + size > length:
-                return -1
-            
-            #code = (a & 0b00000111)*2**18  + (b & 0b00111111) * 2**12 + (c & 0b00111111 ) * 2**6 + (d & 0b00111111 )
-            #code = (lb & 0b00000111)*_2_18 + (chars[cursor+1] & 0b00111111)*_2_12 + (chars[cursor+2] & 0b00111111)*_2_6 + (chars[cursor+3] & 0b00111111)
-            code = ((lb & 7)<<18) | ((chars[cursor+1] & 0x3f)<<12) | ((chars[cursor+2] & 0x3f)<<6) | (chars[cursor+3] & 0x3f)
-            
         else:
-            return -2
-            
+            lb = chars[cursor]
+
+            if (lb - 0xc2) > (0xf4-0xc2):
+                return -1
+
+            if lb < 0x80:
+                size = 1
+                code = lb
+                
+                if last_lb == 60: # '<' 
+                    # check <s>
+                    if lb == 115 and length - cursor >= 2:  # 3 - 1
+                        if (
+                            chars[cursor+1] == 62   # >
+                        ): 
+                            bucket.pop_back() # remove '<'
+                            bucket.push_back(SPECIAL_TOKEN_CLS)
+                            if save_offsets:
+                                offsets.push_back(cursor)
+                                        
+                            if save_cased:
+                                bucket_case.push_back(False)
+                            size = 2  # 3 - 1
+                            cursor += size
+                            last_lb = 0
+                            continue
+                        
+                    # check </s>
+                    elif lb == 47 and length - cursor >= 3:  # 4 - 1
+                        if (
+                            chars[cursor+1] == 115 and  # s
+                            chars[cursor+2] == 62       # >
+                        ): 
+                            bucket.pop_back() # remove '<'
+                            bucket.push_back(SPECIAL_TOKEN_SEP)
+                            if save_offsets:
+                                offsets.push_back(cursor)
+                            if save_cased:
+                                bucket_case.push_back(False)
+                            size = 3  # 4 - 1
+                            cursor += size
+                            last_lb = 0
+                            continue
+                            
+                    # check <mask>  (109, 97, 115, 107)
+                    elif lb == 109 and length - cursor >= 5:  # 6 - 1
+                        if (
+                            chars[cursor+1] == 97 and   # a
+                            chars[cursor+2] == 115 and  # s
+                            chars[cursor+3] == 107 and  # k
+                            chars[cursor+4] == 62       # >
+                        ): 
+                            bucket.pop_back() # remove '<'
+                            bucket.push_back(SPECIAL_TOKEN_MASK)
+                            if save_offsets:
+                                offsets.push_back(cursor)
+                            if save_cased:
+                                bucket_case.push_back(False)
+                            size = 5  # 6 - 1
+                            cursor += size
+                            last_lb = 0
+                            continue
+                        
+                    # check <pad>  (112, 97, 100)
+                    elif lb == 112 and length - cursor >= 4:  # 5 - 1
+                        if (
+                            chars[cursor+1] == 97 and   # a
+                            chars[cursor+2] == 100 and  # d
+                            chars[cursor+3] == 62       # >
+                        ): 
+                            bucket.pop_back() # remove '<'
+                            bucket.push_back(SPECIAL_TOKEN_PAD)
+                            if save_offsets:
+                                offsets.push_back(cursor)
+                            if save_cased:
+                                bucket_case.push_back(False)
+                            size = 4  # 5 - 1
+                            cursor += size
+                            last_lb = 0
+                            continue
+                        
+                    # check <unk>  (117, 110, 107)
+                    elif lb == 117 and length - cursor >= 4:  # 5 - 1
+                        if (
+                            chars[cursor+1] == 110 and   # a
+                            chars[cursor+2] == 107 and  # d
+                            chars[cursor+3] == 62       # >
+                        ): 
+                            bucket.pop_back() # remove '<'
+                            bucket.push_back(SPECIAL_TOKEN_UNK)
+                            if save_offsets:
+                                offsets.push_back(cursor)
+                            if save_cased:
+                                bucket_case.push_back(False)
+                            size = 4  # 5 - 1
+                            cursor += size
+                            last_lb = 0
+                            continue
+                        
+                    # check <nl>  (110, 108)
+                    elif lb == 110 and length - cursor >= 3:  # 4 - 1
+                        if (
+                            chars[cursor+1] == 108 and   # l
+                            chars[cursor+2] == 62        # >
+                        ): 
+                            bucket.pop_back() # remove '<'
+                            bucket.push_back(SPECIAL_TOKEN_NL)
+                            if save_offsets:
+                                offsets.push_back(cursor)
+                            if save_cased:
+                                bucket_case.push_back(False)
+                            size = 3  # 4 - 1
+                            cursor += size
+                            last_lb = 0
+                            continue
+                        
+                
+            elif lb < 0xE0:
+                size = 2
+                if cursor + size > length:
+                    return -1
+                
+                #code = (a & 0b00000111)*2**6  + (b & 0b00111111)
+                code = ((lb & 0x1f)<<6) | (chars[cursor+1] & 0x3f)
+                
+                
+            elif lb < 0xF0:
+                size = 3
+                if cursor + size > length:
+                    return -1
+                
+                #code = (a & 0b00000111)*2**12  + (b & 0b00111111) * 2**6 + (c & 0b00111111 )
+                code = ((lb & 0xf)<<12) | ((chars[cursor+1] & 0x3f)<<6) | (chars[cursor+2] & 0x3f);
+                
+            elif ( lb & 0xF8 ) == 0xF0:
+                size = 4
+                if cursor + size > length:
+                    return -1
+                
+                #code = (a & 0b00000111)*2**18  + (b & 0b00111111) * 2**12 + (c & 0b00111111 ) * 2**6 + (d & 0b00111111 )
+                code = ((lb & 7)<<18) | ((chars[cursor+1] & 0x3f)<<12) | ((chars[cursor+2] & 0x3f)<<6) | (chars[cursor+3] & 0x3f)
+                
+            else:
+                return -2
+                
             
         # Normalize some unicode
         if replacements.find(code) != replacements.end():
@@ -902,19 +883,9 @@ cdef int iter_unicode(const unsigned char[:] chars, vector[int]* bucket, bint ke
             # check a-z (97-122) or A-Z (65-90) or ' (39)
             if (code >= 97 and code <= 122) or code == 39:
                 en_char_length += 1
-            elif (code >= 65 and code <= 90):
+            elif (code <= 90 and code >= 65):
                 cased_count += 1
                 en_char_length += 1
-                
-            elif code == 10:
-                cased_count = 0
-                en_char_length = 0
-                if keep_nl:
-                    bucket.push_back(SPECIAL_TOKEN_NL)
-                    
-            elif code == 32:
-                cased_count = 0
-                en_char_length = 0
                 
             else:
                 if en_char_length > 0:
@@ -922,32 +893,179 @@ cdef int iter_unicode(const unsigned char[:] chars, vector[int]* bucket, bint ke
                     #                           ^ cursor
                     # en_char_length: 7
                     #
-                    # char span:      [cusor - 7, cursor-1]  (i.e. inclusive)
+                    # char span:      [cursor - 7, cursor-1]  (i.e. inclusive)
                     #
+                    # tokenize_word_auto_c(char* chars, int length, bint use_cache, bint to_vocab_id)
+
+                    temp_chars = <char *> malloc(sizeof(char) * en_char_length)
+
+                    #with gil:
+                    #    print('chars: %s'% chars )
+                    #    print('en_char_length: %s'%en_char_length)
+                    #    print('cursor:         %s'%cursor)
+                    #    print(' ')  
+
+                    prev_cursor = cursor - en_char_length
+
+                    for j in range(en_char_length):
+                        c = chars[prev_cursor + j]
+                        temp_chars[j] = (c + 32) if (c <= 90 and c >= 65) else c
                     
-                        
+                    tokenized_result = tokenize_word_auto_c(temp_chars, en_char_length, True, False)
+                    
+                    for j in range(tokenized_result.size()):
+                        bucket.push_back(-tokenized_result[0][j])
+                        if save_offsets:
+                            offsets.push_back(prev_cursor)
+                        if save_cased:
+                            bucket_case.push_back(cased_count > 0)
+
+
+                    free(temp_chars)
+
                     pass
+                    
                         
                     
                 cased_count = 0
                 en_char_length = 0
-                bucket.push_back(code)
+
+                if code == 10:
+                    if keep_nl:
+                        bucket.push_back(SPECIAL_TOKEN_NL)
+                        if save_offsets:
+                            offsets.push_back(cursor)
+                        if save_cased:
+                            bucket_case.push_back(False)
+                elif code != 32:
+                    bucket.push_back(code)
+                    if save_offsets:
+                        offsets.push_back(cursor)
+                    if save_cased:
+                        bucket_case.push_back(False)
+        if cursor >= length:
+            break
         cursor += size
         last_lb = lb
         
-
     return 1
 
-def py_iter_unicode(str text, bint keep_nl=False):
+def tokenize(str text, bint keep_nl=True):
     cdef:
-        vector[int] bucket
+        Encoded encoded = Encoded()
+        bytes text_b = text.encode('utf-8')
         int code
-    code = iter_unicode(text.encode('utf-8'), &bucket, keep_nl)
+
+    code = iter_unicode(text_b, 
+                        len(text_b), 
+                        &encoded.part_ids,
+                        &encoded.casing, 
+                        &encoded.offsets,
+                        keep_nl)
     if code == -1:
         raise Exception ("unexpected end of data")
     elif code == -2:
         raise Exception ('can\'t decode bytes')
-    return bucket
+        
+    return encoded
+
+
+cdef int _tokenize_batch(int size, 
+                         char** texts_b,
+                         size_t* lengths,
+                         vector[int]** part_ids_ptr, 
+                         vector[bool]** casing_ptr, 
+                         vector[int]** offsets_ptr,
+                         bint keep_nl) nogil:
+    cdef:
+        int i
+        int code
+
+    if size > 1:
+        for i in prange(size, schedule='static'):
+            code = iter_unicode(texts_b[i], 
+                                lengths[i], 
+                                part_ids_ptr[i],
+                                casing_ptr[i], 
+                                offsets_ptr[i],
+                                keep_nl)
+            if code < -1:
+                return code
+                
+    else:
+        for i in range(size):
+            code = iter_unicode(texts_b[i], 
+                                lengths[i], 
+                                part_ids_ptr[i],
+                                casing_ptr[i], 
+                                offsets_ptr[i],
+                                keep_nl)
+            if code < -1:
+                return code
+
+from cpython cimport PyBytes_AsStringAndSize
+
+ctypedef vector[int]* vector_int_star
+ctypedef vector[bool]* vector_bool_star
+
+def tokenize_batch(list texts, bint keep_nl=True):
+    cdef:
+        int size = len(texts), i
+        Py_ssize_t length
+        int code
+        list encodeds = [Encoded() for i in range(size)]
+
+        Encoded encoded
+
+        vector[int]** part_ids_ptr = <vector[int]**>malloc(sizeof(vector_int_star) * size)
+        vector[bool]** casing_ptr = <vector[bool]**>malloc(sizeof(vector_bool_star) * size)
+        vector[int]** offsets_ptr = <vector[int]**>malloc(sizeof(vector_int_star) * size)
+        char** texts_b = <char**>malloc(sizeof(char*) * size)
+        size_t* lengths = <size_t*>malloc(sizeof(size_t*) * size)
+
+    for i in range(size):
+        PyBytes_AsStringAndSize(texts[i], &texts_b[i], &length)
+        encoded = encodeds[i]
+        part_ids_ptr[i] = &(encoded.part_ids)
+        casing_ptr[i] = &(encoded.casing)
+        offsets_ptr[i] = &(encoded.offsets)
+        lengths[i] = length
+
+    code = _tokenize_batch(size, 
+                           texts_b,
+                           lengths,
+                           part_ids_ptr, 
+                           casing_ptr, 
+                           offsets_ptr,
+                           keep_nl)
+    if code == -1:
+        raise Exception ("unexpected end of data")
+    elif code == -2:
+        raise Exception ('can\'t decode bytes')
+
+
+    free(texts_b)
+    free(lengths)
+    free(part_ids_ptr)
+    free(casing_ptr)
+    free(offsets_ptr)
+
+    return encodeds
+
+
+
+def py_iter_unicode(str text, bint keep_nl=False):
+    cdef:
+        vector[int] part_ids = vector[int]()
+        int code
+        bytes text_b = text.encode('utf-8')
+        
+    code = iter_unicode(text_b, len(text_b), &part_ids, NULL, NULL, keep_nl)
+    if code == -1:
+        raise Exception ("unexpected end of data")
+    elif code == -2:
+        raise Exception ('can\'t decode bytes')
+    return part_ids
 
 def test():
     text = "[]"
@@ -2130,6 +2248,7 @@ def make_irregular():
                             &repl_combined[i],
                             &(repl[m]),
                             &repl_combined_temp,
+                            999,
                             1,
                             &max_score,
                             999
@@ -2714,6 +2833,8 @@ cdef vector[int]* tokenize_word_auto_c(char* chars, int length, bint use_cache, 
     cdef unsigned long cache_key = 0
     cdef vector[int]* result_contents
     cdef size_t t
+
+
     if length <= 26:
         for i in range(length):
             t = chars[i]
@@ -2721,8 +2842,7 @@ cdef vector[int]* tokenize_word_auto_c(char* chars, int length, bint use_cache, 
                 cache_key += int128_power[26][i]
             elif t >= 97 and t <= 122:
                 cache_key += int128_power[t-97][i]
-
-
+                
     openmp.omp_set_lock(&lock)
     if use_cache and tokenize_lru_cache.exists(cache_key):
         openmp.omp_unset_lock(&lock)
@@ -2732,7 +2852,8 @@ cdef vector[int]* tokenize_word_auto_c(char* chars, int length, bint use_cache, 
     result_contents.reserve(8)
     tokenize_lru_cache.put(cache_key, result_contents)
     openmp.omp_unset_lock(&lock)
-    
+
+        
     max_call_depth = 5
 
     _tokenize_word(chars, length, result_contents, max_call_depth, MIN_SCORE_RATIO, False)
@@ -2771,7 +2892,7 @@ def tokenize_word(str word, int max_call_depth = 0, float min_score_ratio = 1.25
 
     cdef vector[int] result_contents = vector[int]()
     result_contents.reserve(8)
-    _tokenize_word(<char *>b_word, length, &result_contents, max_call_depth, min_score_ratio, debug)
+    assert _tokenize_word(<char *>b_word, length, &result_contents, max_call_depth, min_score_ratio, debug), "_tokenize_word ree"
 
     if to_vocab_id:
         for i in range(result_contents.size()):
@@ -2862,6 +2983,7 @@ cdef int _tokenize_word_to_parts(char* chars, int length, vector[Parts]* results
         int call_depth = 0
         float max_score = -100
         float cmp_max_score , score
+        int count
 
     for i in range(length+1):
         cache.push_back(vector[Parts]())
@@ -2870,7 +2992,7 @@ cdef int _tokenize_word_to_parts(char* chars, int length, vector[Parts]* results
     parts = (contents, 0, 0, 0)
     
     results.reserve(1024)
-    tokenize_inner(chars, cursor, length, parts, &cache, 100, &max_score, NULL, min_score_ratio, call_depth, results, debug)
+    tokenize_inner(chars, cursor, length, parts, &cache, 100, &max_score, NULL, min_score_ratio, call_depth, &count, results, debug)
 
     i = 0
     cmp_max_score = -100
@@ -2904,8 +3026,10 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
         bint cont = True
         float cmp_max_score
         float score
-        vector[Parts] results
+        vector[Parts] results = vector[Parts]()
+        int count = 0
 
+    results.reserve(1024)
 
     for i in range(length+1):
         cache.push_back(vector[Parts]())
@@ -2917,14 +3041,35 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
         for i in range(length):
             min_num_splitted[i] = 100
         max_score = -100
-        results = vector[Parts]()
-        results.reserve(1024)
-        tokenize_inner(chars, cursor, length, parts, &cache, max_call_depth, &max_score, min_num_splitted, min_score_ratio, call_depth, &results, debug)
+        results.clear()
+        tokenize_inner(chars, cursor, length, parts, &cache, max_call_depth, &max_score, min_num_splitted, min_score_ratio, call_depth, &count, &results, debug)
             
-
         size = results.size()
+        if debug:
+            with gil:
+                print('size:  '+str(size))
+                print('count: '+str(count))
+
+        if size == 0:
+            for j in range(contents[0]):
+                result_contents.push_back(contents[j+1])
+            contents[0] = 0
+            max_score = -100
+            results.clear()
+            tokenize_inner(chars, cursor, length, parts, &cache, max_call_depth, &max_score, min_num_splitted, min_score_ratio, call_depth, &count, &results, debug)
+            size = results.size()
+
+         
+        if size == 0:   
+            while cursor < length:
+                result_contents.push_back(get_part(true_all_alphabets[chars[cursor]], ROOT, MERGE_MODE_BOTH))
+            break
+
+
+                
         if size == 0:
             return 0
+
 
         cmp_max_score = -100
         i = 0
@@ -3003,6 +3148,7 @@ cdef void tokenize_inner(
     int* min_num_splitted,
     float min_score_ratio, 
     int call_depth,
+    int* count,
     vector[Parts]* returns,
     bint debug) nogil:
 
@@ -3034,11 +3180,13 @@ cdef void tokenize_inner(
     cache_length = cache_value.size()
 
     if cache_length > 0:
+        count[0] += cache_length
         for i in range(cache_length):
             merge_two_parts(
                 &parts,
                 &(cache_value[0][i]),
                 returns,
+                length,
                 call_depth,
                 max_score,
                 min_score_ratio
@@ -3048,14 +3196,13 @@ cdef void tokenize_inner(
 
     cdef bint matched = False
 
-
     to_be_cached = vector[Parts]()
     to_be_cached.reserve(1024)
 
     len_this = length - cursor
     
     prefixes_ids = trie_obj._prefixes_id(
-        word + cursor,        # pass the characters starting from `cursor` position
+        <char *>(word + cursor),        # pass the characters starting from `cursor` position
         len_this,      # pass the length after the `cursor` position
     )
     
@@ -3067,6 +3214,9 @@ cdef void tokenize_inner(
         
         matched = True
         true_trie_value = true_trie_values[p]
+        if debug:
+            with gil:
+                print(' '*call_depth +'splitted ' + str(true_trie_values_length[p]))
 
         # iterate the possible parts
         # i.e. internal  ->  intern (R),           inter (P),   in (P), in (R), in (S)
@@ -3105,12 +3255,14 @@ cdef void tokenize_inner(
                     cursor+len_p,
                     len_part_max if len_part_max > temp_parts[0][3] else temp_parts[0][3],
                 )
-
+                
                 to_be_cached.push_back(new_parts)
+                count[0] += 1
                 merge_two_parts(
                     &parts,
                     &new_parts,
                     returns,
+                    length,
                     call_depth,
                     max_score,
                     min_score_ratio
@@ -3132,6 +3284,7 @@ cdef void tokenize_inner(
                     min_num_splitted,
                     min_score_ratio,
                     call_depth+1, 
+                    count,
                     &ret,
                     debug
                 )
@@ -3143,12 +3296,14 @@ cdef void tokenize_inner(
                         elif temp_parts_length - min_num_splitted[cursor] > MAX_SPLIT_DIFF:
                             free(ret[k][0])
                             continue
-
+                    
                     to_be_cached.push_back(ret[k])
+                    count[0] += 1
                     merge_two_parts(
                         &parts,
                         &ret[k],
                         returns,
+                        length,
                         call_depth,
                         max_score,
                         min_score_ratio
@@ -3165,9 +3320,7 @@ cdef void tokenize_inner(
     temp_contents = <int*> malloc(sizeof(int)*2)
     temp_contents[0] = 0
     new_parts = (temp_contents, 0, 0, 0)
-    if repeated > 0:
-        pass
-    else:
+    if repeated == 0:
         if true_all_alphabets.find(word[cursor]) != true_all_alphabets.end():
             temp_contents[0] = 1
             temp_contents[1] = get_part(true_all_alphabets[word[cursor]], ROOT, MERGE_MODE_BOTH)
@@ -3186,6 +3339,7 @@ cdef void tokenize_inner(
             min_num_splitted,
             min_score_ratio,
             call_depth+1, 
+            count,
             &ret,
             debug
         )
@@ -3203,18 +3357,21 @@ cdef void tokenize_inner(
                     elif temp_parts_length - min_num_splitted[cursor] > MAX_SPLIT_DIFF:
                         free(ret[k][0])
                         continue
+                
                 to_be_cached.push_back(ret[k])
+                count[0] += 1
                 merge_two_parts(
                     &parts,
                     &ret[k],
                     returns,
+                    length,
                     call_depth,
                     max_score,
                     min_score_ratio
                 )
 
     free(temp_contents)
-
+    
     cache[0][cursor] = to_be_cached
     
 
@@ -3223,9 +3380,10 @@ cdef void merge_two_parts(
     Parts* A_parts, 
     Parts* B_parts, 
     vector[Parts]* returns, 
+    int length, 
     int call_depth,
     float* max_score, 
-    float min_score_ratio
+    float min_score_ratio,
     ) nogil:
     cdef:
         int* A_contents = A_parts[0][0]
@@ -3305,17 +3463,23 @@ cdef void merge_two_parts(
         if not has_root:
             new_score -= 1
 
+        size = A_length+B_length
 
-        # ends with prefix and start with suffix is not good
-        for m from size-1 >= m >= 0: 
-            A_part_form = A_contents[m+1] if m < A_length else B_contents[m+1 - A_length]
-            if A_part_form == PREFIX:
-                new_score -= 1
-            elif A_part_form == SUFFIX:
-                continue
-            break
+
+        if B_parts[0][2] >= length:
+            # ends with prefix is not good
+            for m from size-1 >= m >= 0: 
+                A_part_form = (A_contents[m+1] if m < A_length else B_contents[m+1 - A_length]) % 3
+                if A_part_form == PREFIX:
+                    new_score -= 1
+                elif A_part_form == SUFFIX:
+                    continue
+                break
+
+
+        # start with suffix is not good
         for m in range(size):
-            A_part_form = A_contents[m+1] if m < A_length else B_contents[m+1 - A_length]
+            A_part_form = (A_contents[m+1] if m < A_length else B_contents[m+1 - A_length]) % 3
             if A_part_form == SUFFIX:
                 new_score -= 1
             elif A_part_form == PREFIX:
