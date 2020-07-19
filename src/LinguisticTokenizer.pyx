@@ -170,6 +170,74 @@ cdef extern from "<unordered_set>" namespace "std" nogil:
 
 
 
+cimport openmp
+cdef openmp.omp_lock_t lock
+openmp.omp_init_lock(&lock)
+
+cdef unordered_map[long, openmp.omp_lock_t] lock_map
+cdef unordered_map[long, int] test_lock_map_value
+test_lock_map_value[0] = 0
+cdef _test_lock_map():
+    cdef int i, cache_key = 0, N = 1000000
+    cdef openmp.omp_lock_t* temp_lock
+    cdef int* table = <int*> malloc(sizeof(int*)*N)
+    cdef int ok_count = 0
+    for i in prange(1000000, schedule='static', nogil=True):
+
+        # global single
+        openmp.omp_set_lock(&lock)
+
+        if lock_map.find(cache_key) == lock_map.end():
+            lock_map[cache_key] = openmp.omp_lock_t()
+            openmp.omp_init_lock(&lock_map[cache_key])
+            openmp.omp_set_lock(&lock_map[cache_key])
+
+            # global single
+            openmp.omp_unset_lock(&lock)
+        else:
+            temp_lock = &(lock_map[cache_key])
+            # global single
+            openmp.omp_unset_lock(&lock)
+
+            openmp.omp_set_lock(temp_lock)
+            openmp.omp_unset_lock(temp_lock)
+
+            table[i] = test_lock_map_value[cache_key]
+
+            continue
+
+        test_lock_map_value[cache_key] = 100
+        table[i] = test_lock_map_value[cache_key]
+
+        # some work here
+        # some work here
+        # some work here
+        # some work here
+        # some work here
+        # some work here
+
+        # global single
+        openmp.omp_set_lock(&lock)
+
+        openmp.omp_unset_lock(&lock_map[cache_key])
+        # openmp.omp_destroy_lock(&lock_map[cache_key])
+
+        # global single
+        openmp.omp_unset_lock(&lock)
+
+
+    for i in range(N):
+        if table[i] == 100:
+            ok_count += 1
+
+    return ok_count
+
+def test_lock_map():
+    t = _test_lock_map()
+    print(t)
+
+
+
 try:
     from itertools import izip
 except ImportError:
@@ -655,22 +723,71 @@ cdef class Encoded:
     cdef vector[int] _ids
     cdef readonly vector[bool] casing
     cdef readonly vector[int] offsets
+    cdef readonly unicode text
 
     def __init__(self):
         self.part_ids = vector[int]()
         self._ids = vector[int]()
         self.casing = vector[bool]()
         self.offsets = vector[int]()
+        self.text = u""
         pass
 
     cdef make_ids(self):
-        cdef int i
+        cdef int i, j
         if self._ids.size() == 0:
             self._ids.reserve(self.part_ids.size())
             for i in range(self.part_ids.size()):
-                if true_part_id_to_vocab_id.find(self.part_ids[i]) == true_part_id_to_vocab_id.end():
+                j = -self.part_ids[i]
+                if true_part_id_to_vocab_id.find(j) == true_part_id_to_vocab_id.end():
                     return
-                self._ids.push_back(true_part_id_to_vocab_id[self.part_ids[i]])
+                self._ids.push_back(true_part_id_to_vocab_id[j])
+
+    cdef extend(self, Encoded another_encoded):
+        cdef int i, length = len(self.text)
+        self.text += another_encoded.text
+
+        self.part_ids.reserve(self.part_ids.size() + another_encoded.part_ids.size())
+        for i in range(another_encoded.part_ids.size()):
+            self.part_ids.push_back(another_encoded.part_ids[i])
+
+        self.casing.reserve(self.casing.size() + another_encoded.casing.size())
+        for i in range(another_encoded.casing.size()):
+            self.casing.push_back(another_encoded.casing[i])
+
+        self.offsets.reserve(self.offsets.size() + another_encoded.offsets.size())
+        for i in range(another_encoded.offsets.size()):
+            self.offsets.push_back(another_encoded.offsets[i] + length)
+
+        return self
+
+
+    def __add__(self, Encoded another_encoded):
+        cdef Encoded encoded = Encoded()
+        cdef int i, length = len(self.text)
+        encoded.text = self.another_encoded.text + another_encoded.text
+
+        encoded.part_ids.reserve(self.part_ids.size() + another_encoded.part_ids.size())
+        for i in range(self.part_ids.size()):
+            encoded.part_ids.push_back(self.part_ids[i])
+        for i in range(another_encoded.part_ids.size()):
+            encoded.part_ids.push_back(another_encoded.part_ids[i])
+
+        encoded.casing.reserve(self.casing.size() + another_encoded.casing.size())
+        for i in range(self.part_ids.size()):
+            encoded.casing.push_back(self.casing[i])
+        for i in range(another_encoded.casing.size()):
+            encoded.casing.push_back(another_encoded.casing[i])
+
+        encoded.offsets.reserve(self.offsets.size() + another_encoded.offsets.size())
+        for i in range(self.offsets.size()):
+            encoded.offsets.push_back(self.offsets[i] + length)
+        for i in range(another_encoded.offsets.size()):
+            encoded.offsets.push_back(another_encoded.offsets[i] + length)
+
+        return encoded
+
+
 
     @property
     def length(self):
@@ -685,11 +802,35 @@ cdef class Encoded:
         self.make_ids()
         return self._ids
 
+    @property
+    def offsets_span(self):
+        cdef int offset, offset_2, i, size = self.offsets.size(), length = len(self.text)
+        spans = []
+        for i in range(size):
+            offset = self.offsets[i]
+            offset_2 = offset
+            while offset_2 == offset:
+                i += 1
+                if i >= size:
+                    offset_2 = length
+                    break
+                offset_2 = self.offsets[i]
+            spans.append((offset, offset_2))
+
+        return spans
+
     def __str__(self):
-        return ' '.join((all_parts_list[e//9-1]+' (%s)'%FORMS[e%3]   ) for e in self.part_ids)
+        return ' '.join(
+            (all_parts_list[(-e)//9-1]+' (%s)'%FORMS[(-e)%3]) if e < 0 else chr(e)
+            for e in self.part_ids)
+
+    def __getitem__(self, i):
+        e = self.part_ids[i]
+        return (all_parts_list[(-e)//9-1]+' (%s)'%FORMS[(-e)%3]) if e < 0 else chr(e)
+        
 
     def __repr__(self):
-        return "Encoded(%r)" % (repr(self.__str__()))
+        return "Encoded(%r)" % (self.__str__())
 
 
 cdef int iter_unicode(char* chars, 
@@ -709,6 +850,7 @@ cdef int iter_unicode(char* chars,
         bint save_cased = bucket_case != NULL
         bint save_offsets = offsets != NULL
         size_t cased_count = 0
+        int unicode_cursor = 0
         
     bucket.reserve(length)
     if save_cased:
@@ -738,15 +880,20 @@ cdef int iter_unicode(char* chars,
                         if (
                             chars[cursor+1] == 62   # >
                         ): 
+                            if save_offsets:
+                                offsets.push_back(unicode_cursor)
+
                             bucket.pop_back() # remove '<'
                             bucket.push_back(SPECIAL_TOKEN_CLS)
-                            if save_offsets:
-                                offsets.push_back(cursor)
                                         
                             if save_cased:
                                 bucket_case.push_back(False)
-                            size = 2  # 3 - 1
-                            cursor += size
+                                
+                            #  this <s>
+                            #       ^
+                            #  cusor: 5
+                            unicode_cursor += 3
+                            cursor += 3
                             last_lb = 0
                             continue
                         
@@ -756,14 +903,19 @@ cdef int iter_unicode(char* chars,
                             chars[cursor+1] == 115 and  # s
                             chars[cursor+2] == 62       # >
                         ): 
+                            if save_offsets:
+                                offsets.push_back(unicode_cursor)
                             bucket.pop_back() # remove '<'
                             bucket.push_back(SPECIAL_TOKEN_SEP)
-                            if save_offsets:
-                                offsets.push_back(cursor)
+                            
                             if save_cased:
                                 bucket_case.push_back(False)
-                            size = 3  # 4 - 1
-                            cursor += size
+
+                            #  this </s>
+                            #       ^
+                            #  cusor: 5
+                            unicode_cursor += 4
+                            cursor += 4
                             last_lb = 0
                             continue
                             
@@ -775,14 +927,19 @@ cdef int iter_unicode(char* chars,
                             chars[cursor+3] == 107 and  # k
                             chars[cursor+4] == 62       # >
                         ): 
+                            if save_offsets:
+                                offsets.push_back(unicode_cursor)
                             bucket.pop_back() # remove '<'
                             bucket.push_back(SPECIAL_TOKEN_MASK)
-                            if save_offsets:
-                                offsets.push_back(cursor)
+                            
                             if save_cased:
                                 bucket_case.push_back(False)
-                            size = 5  # 6 - 1
-                            cursor += size
+                                
+                            #  this <mask>
+                            #       ^
+                            #  cusor: 5
+                            unicode_cursor += 6
+                            cursor += 6
                             last_lb = 0
                             continue
                         
@@ -793,14 +950,19 @@ cdef int iter_unicode(char* chars,
                             chars[cursor+2] == 100 and  # d
                             chars[cursor+3] == 62       # >
                         ): 
+                            if save_offsets:
+                                offsets.push_back(unicode_cursor)
                             bucket.pop_back() # remove '<'
                             bucket.push_back(SPECIAL_TOKEN_PAD)
-                            if save_offsets:
-                                offsets.push_back(cursor)
+                            
                             if save_cased:
                                 bucket_case.push_back(False)
-                            size = 4  # 5 - 1
-                            cursor += size
+                                
+                            #  this <pad>
+                            #       ^
+                            #  cusor: 5
+                            unicode_cursor += 5
+                            cursor += 5  # 5 - 1
                             last_lb = 0
                             continue
                         
@@ -811,14 +973,19 @@ cdef int iter_unicode(char* chars,
                             chars[cursor+2] == 107 and  # d
                             chars[cursor+3] == 62       # >
                         ): 
+                            if save_offsets:
+                                offsets.push_back(unicode_cursor)
                             bucket.pop_back() # remove '<'
                             bucket.push_back(SPECIAL_TOKEN_UNK)
-                            if save_offsets:
-                                offsets.push_back(cursor)
+                            
                             if save_cased:
                                 bucket_case.push_back(False)
-                            size = 4  # 5 - 1
-                            cursor += size
+                                
+                            #  this <unk>
+                            #       ^
+                            #  cusor: 5
+                            unicode_cursor += 5
+                            cursor += 5
                             last_lb = 0
                             continue
                         
@@ -828,14 +995,19 @@ cdef int iter_unicode(char* chars,
                             chars[cursor+1] == 108 and   # l
                             chars[cursor+2] == 62        # >
                         ): 
+                            if save_offsets:
+                                offsets.push_back(unicode_cursor)
                             bucket.pop_back() # remove '<'
                             bucket.push_back(SPECIAL_TOKEN_NL)
-                            if save_offsets:
-                                offsets.push_back(cursor)
+                            
                             if save_cased:
                                 bucket_case.push_back(False)
-                            size = 3  # 4 - 1
-                            cursor += size
+                                
+                            #  this <nl>
+                            #       ^
+                            #  cusor: 5
+                            unicode_cursor += 4
+                            cursor += 4
                             last_lb = 0
                             continue
                         
@@ -869,6 +1041,7 @@ cdef int iter_unicode(char* chars,
                 return -2
                 
             
+
         # Normalize some unicode
         if replacements.find(code) != replacements.end():
             repl = replacements[code]+1
@@ -889,7 +1062,7 @@ cdef int iter_unicode(char* chars,
                 
             else:
                 if en_char_length > 0:
-                    # Situation:   `::!! english `
+                    # Situation:   `::!! english time`
                     #                           ^ cursor
                     # en_char_length: 7
                     #
@@ -914,9 +1087,10 @@ cdef int iter_unicode(char* chars,
                     tokenized_result = tokenize_word_auto_c(temp_chars, en_char_length, True, False)
                     
                     for j in range(tokenized_result.size()):
-                        bucket.push_back(-tokenized_result[0][j])
                         if save_offsets:
-                            offsets.push_back(prev_cursor)
+                            offsets.push_back(unicode_cursor - en_char_length)
+                        bucket.push_back(-tokenized_result[0][j])
+                        
                         if save_cased:
                             bucket_case.push_back(cased_count > 0)
 
@@ -932,30 +1106,34 @@ cdef int iter_unicode(char* chars,
 
                 if code == 10:
                     if keep_nl:
-                        bucket.push_back(SPECIAL_TOKEN_NL)
                         if save_offsets:
-                            offsets.push_back(cursor)
+                            offsets.push_back(unicode_cursor)
+                        bucket.push_back(SPECIAL_TOKEN_NL)
+                        
                         if save_cased:
                             bucket_case.push_back(False)
                 elif code != 32:
-                    bucket.push_back(code)
                     if save_offsets:
-                        offsets.push_back(cursor)
+                        offsets.push_back(unicode_cursor)
+                    bucket.push_back(code)
+
                     if save_cased:
                         bucket_case.push_back(False)
+
         if cursor >= length:
             break
         cursor += size
+        unicode_cursor += 1
         last_lb = lb
         
     return 1
 
-def tokenize(str text, bint keep_nl=True):
+def tokenize(unicode text, bint keep_nl=True):
     cdef:
         Encoded encoded = Encoded()
         bytes text_b = text.encode('utf-8')
         int code
-
+    encoded.text = text
     code = iter_unicode(text_b, 
                         len(text_b), 
                         &encoded.part_ids,
@@ -982,14 +1160,14 @@ cdef int _tokenize_batch(int size,
         int code
 
     if size > 1:
-        for i in prange(size, schedule='static'):
+        for i in prange(size, schedule='static', nogil=True):
             code = iter_unicode(texts_b[i], 
                                 lengths[i], 
                                 part_ids_ptr[i],
                                 casing_ptr[i], 
                                 offsets_ptr[i],
                                 keep_nl)
-            if code < -1:
+            if code <= -1:
                 return code
                 
     else:
@@ -1000,7 +1178,7 @@ cdef int _tokenize_batch(int size,
                                 casing_ptr[i], 
                                 offsets_ptr[i],
                                 keep_nl)
-            if code < -1:
+            if code <= -1:
                 return code
 
 from cpython cimport PyBytes_AsStringAndSize
@@ -1024,13 +1202,14 @@ def tokenize_batch(list texts, bint keep_nl=True):
         size_t* lengths = <size_t*>malloc(sizeof(size_t*) * size)
 
     for i in range(size):
-        PyBytes_AsStringAndSize(texts[i], &texts_b[i], &length)
+        texts_b[i] = PyUnicode_AsUTF8AndSize(texts[i], &length)
         encoded = encodeds[i]
+        encoded.text = texts[i]
         part_ids_ptr[i] = &(encoded.part_ids)
         casing_ptr[i] = &(encoded.casing)
         offsets_ptr[i] = &(encoded.offsets)
         lengths[i] = length
-
+    
     code = _tokenize_batch(size, 
                            texts_b,
                            lengths,
@@ -1144,9 +1323,7 @@ test()
 
 
 
-
-
-
+    
 
 
 
@@ -1965,13 +2142,26 @@ def load_data(alphabets = "abcdefghijklmnopqrstuvwxyz", debug=False):
     fn = get_file('words2.txt')
     with open(fn) as f:
         words = f.read()
-        
+
+    part_id_to_vocab_id[-SPECIAL_TOKEN_PAD] = vocab_id
+
+    vocab_id += 1
+    part_id_to_vocab_id[-SPECIAL_TOKEN_UNK] = vocab_id
+    vocab_id += 1
+    part_id_to_vocab_id[-SPECIAL_TOKEN_CLS] = vocab_id
+    vocab_id += 1
+    part_id_to_vocab_id[-SPECIAL_TOKEN_SEP] = vocab_id
+    vocab_id += 1
+    part_id_to_vocab_id[-SPECIAL_TOKEN_MASK] = vocab_id
+    vocab_id += 1
+    part_id_to_vocab_id[-SPECIAL_TOKEN_NL] = vocab_id
+
     for e in alphabets:
         vocab_id += 1
         part_id += 1
         all_parts[e] = part_id
         all_parts_list.append(e)
-        all_vocabs[e] = vocab_id - 1
+        all_vocabs[e] = vocab_id
         all_vocabs_list.append(e)
 
         single_words_any.add(e)
@@ -1981,7 +2171,23 @@ def load_data(alphabets = "abcdefghijklmnopqrstuvwxyz", debug=False):
                 part_id, 
                 SUFFIX, 
                 MERGE_MODE_BOTH
-                )] = vocab_id - 1
+                )] = vocab_id
+
+        
+    fn = get_file('ind_chars.txt')
+    with open(fn) as f:
+        ind_chars = f.read()
+
+    for e in ind_chars.split('\n'):
+        e = e.strip()
+        if not e:
+            continue
+        assert len(e) == 1
+        
+        vocab_id += 1
+        part_id_to_vocab_id[-ord(e)] = vocab_id
+
+
 
     '''
     must_have_prefixes = "-"
@@ -2546,14 +2752,7 @@ cdef double get_time():
     current = ts.tv_sec + (ts.tv_nsec / 1000000000.)
     return current 
 
-cimport openmp
-cdef openmp.omp_lock_t lock
-openmp.omp_init_lock(&lock)
 cdef bint loaded = False
-
-
-
-
 
 def load(str path, str name, bint profile=False, bint debug=False):
     global all_parts_list, loaded
@@ -2843,14 +3042,39 @@ cdef vector[int]* tokenize_word_auto_c(char* chars, int length, bint use_cache, 
             elif t >= 97 and t <= 122:
                 cache_key += int128_power[t-97][i]
                 
-    openmp.omp_set_lock(&lock)
     if use_cache and tokenize_lru_cache.exists(cache_key):
-        openmp.omp_unset_lock(&lock)
         return tokenize_lru_cache.get(cache_key)
+
+    openmp.omp_set_lock(&lock)
+
+    if lock_map.find(cache_key) == lock_map.end():
+        lock_map[cache_key] = openmp.omp_lock_t()
+        openmp.omp_init_lock(&lock_map[cache_key])
+        openmp.omp_set_lock(&lock_map[cache_key])
+
+        # global single
+        openmp.omp_unset_lock(&lock)
+    else:
+        temp_lock = &(lock_map[cache_key])
+        # global single
+        openmp.omp_unset_lock(&lock)
+
+        openmp.omp_set_lock(temp_lock)
+        openmp.omp_unset_lock(temp_lock)
+
+
+        return tokenize_lru_cache.get(cache_key)
+
 
     result_contents = new vector[int]()
     result_contents.reserve(8)
-    tokenize_lru_cache.put(cache_key, result_contents)
+
+    #lock_map[cache_key] = openmp.omp_lock_t()
+    #openmp.omp_init_lock(&lock_map[cache_key])
+    #openmp.omp_unset_lock(&lock_map[cache_key])
+    #openmp.omp_destroy_lock(&lock_map[cache_key])
+
+
     openmp.omp_unset_lock(&lock)
 
         
@@ -2864,6 +3088,18 @@ cdef vector[int]* tokenize_word_auto_c(char* chars, int length, bint use_cache, 
                 return NULL
             result_contents[0][i] = true_part_id_to_vocab_id[result_contents[0][i]]
             
+
+
+    # global single
+    openmp.omp_set_lock(&lock)
+    tokenize_lru_cache.put(cache_key, result_contents)
+    openmp.omp_unset_lock(&lock_map[cache_key])
+    # openmp.omp_destroy_lock(&lock_map[cache_key])
+
+    # global single
+    openmp.omp_unset_lock(&lock)
+
+
     return result_contents
 
 def tokenize_word_auto(str word, bint use_cache=False, bint to_vocab_id=False):
