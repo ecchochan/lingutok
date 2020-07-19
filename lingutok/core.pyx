@@ -2786,7 +2786,7 @@ def load(path=None, name=None, bint profile=False, bint debug=False, force=False
         if not exists or force:
             print('generating data at %s'%path)
             import sys, subprocess
-            os.mkdir(path)
+            
             if not os.path.exists(path):
                 os.mkdir(path)
             subprocess.call([sys.executable, 
