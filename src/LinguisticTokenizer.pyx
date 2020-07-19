@@ -2772,7 +2772,6 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
         exists = os.path.exists(p)
         if not exists:
             print('generating data at %s'%p)
-            LinguisticTokenizer.generate_trie(path, 'default')
             import sys, subprocess
             subprocess.call([sys.executable, 
                 "-c", 
