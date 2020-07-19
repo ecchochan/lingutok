@@ -668,10 +668,12 @@ package_name = 'LinguisticTokenizer'
 import os.path
 import json
 
-
+root = resource_filename(package_name, '')
 def get_file(x):
-    return resource_filename(package_name, 'resources/' + x)
-
+    return root+ '/resources/' + x
+def set_root(x):
+    global root
+    root = x
 
 cdef int SPECIAL_TOKEN_PAD  = 0
 cdef int SPECIAL_TOKEN_UNK  = 1
@@ -683,39 +685,42 @@ cdef int SPECIAL_TOKEN_NL   = 10
 cdef unordered_map[int, int*] replacements
 cdef int* replacement_temp
 cdef int L, i
-fn = get_file('zh_char2str_mapping.txt')
-with open(fn) as f:
-    for line in f:
-        line = line[:len(line)-1]
-        if not line:
-            continue
-        splitted = line.split('\t')
-        if len(splitted) != 2:
-            continue
-        a, b = splitted
-        assert len(a) == 1
-        L = len(b)
+
+def load_mapping():
+    replacements.clear()
+    fn = get_file('zh_char2str_mapping.txt')
+    with open(fn) as f:
+        for line in f:
+            line = line[:len(line)-1]
+            if not line:
+                continue
+            splitted = line.split('\t')
+            if len(splitted) != 2:
+                continue
+            a, b = splitted
+            assert len(a) == 1
+            L = len(b)
+            replacement_temp = <int*> malloc(sizeof(int) * (L+1))
+            replacement_temp[0] = L
+            for i in range(L):
+                replacement_temp[i+1] = ord(b[i])
+                
+            replacements[ord(a)] = replacement_temp
+
+
+    custom_mapping = {
+        '\r': (ord(' '),),
+        '\t': (ord(' '),),
+    }
+    for k, v in custom_mapping.items():
+        L = len(v)
         replacement_temp = <int*> malloc(sizeof(int) * (L+1))
         replacement_temp[0] = L
         for i in range(L):
-            replacement_temp[i+1] = ord(b[i])
-            
-        replacements[ord(a)] = replacement_temp
+            replacement_temp[i+1] = v[i]
+        replacements[ord(k)] = replacement_temp
 
-
-custom_mapping = {
-    '\r': (ord(' '),),
-    '\t': (ord(' '),),
-}
-for k, v in custom_mapping.items():
-    L = len(v)
-    replacement_temp = <int*> malloc(sizeof(int) * (L+1))
-    replacement_temp[0] = L
-    for i in range(L):
-        replacement_temp[i+1] = v[i]
-    replacements[ord(k)] = replacement_temp
-
-
+load_mapping()
 
 from libcpp cimport bool
 cdef class Encoded:
@@ -2754,9 +2759,19 @@ cdef double get_time():
 
 cdef bint loaded = False
 
-def load(str path, str name, bint profile=False, bint debug=False):
+def load(path=None, name=None, bint profile=False, bint debug=False):
     global all_parts_list, loaded
     openmp.omp_set_lock(&lock)
+    if loaded:
+        openmp.omp_unset_lock(&lock)
+        print('Already loaded.')
+        return
+
+    if path is None:
+        path = root
+    if name is None:
+        name = 'default'
+        
     cdef unordered_set[int] mapping
     cdef Parts* vector_parts
     cdef int* vector_part
