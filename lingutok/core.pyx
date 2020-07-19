@@ -1374,7 +1374,7 @@ no_suffixed_by_of_roots = {}
 no_suffixed_by_of_nonroots = {}
 
 
-cdef unordered_map[int, unordered_set[int]] true_no_prefixed_by_of = unordered_map[int, unordered_set[int]]()
+cdef unordered_map[int, unordered_set[int]] true_only_prefixed_by_of = unordered_map[int, unordered_set[int]]()
 cdef unordered_map[int, unordered_set[int]] true_only_suffixed_by_of = unordered_map[int, unordered_set[int]]()
 cdef unordered_map[int, unordered_set[int]] true_no_suffixed_by_of = unordered_map[int, unordered_set[int]]()
 cdef unordered_map[int, unordered_set[int]] true_no_suffixed_by_of_roots = unordered_map[int, unordered_set[int]]()
@@ -1404,10 +1404,10 @@ cdef bint adjacent_violate_c(int A_part, int B_part) nogil:
         ):
         return False
 
-    it1 = true_no_prefixed_by_of.find(B)
+    it1 = true_only_prefixed_by_of.find(B)
     #if B in no_prefixed_by_of and A in no_prefixed_by_of[B]:
-    if (it1 != true_no_prefixed_by_of.end() and 
-        deref(it1).second.find(A) != deref(it1).second.end()):
+    if (it1 != true_only_prefixed_by_of.end() and 
+        deref(it1).second.find(A) == deref(it1).second.end()):
         return True
 
         
@@ -2594,7 +2594,7 @@ def true_trie_values_to_np():
     
 
 
-    #true_no_prefixed_by_of[all_parts[k]] = {all_parts[c] for c in v}
+    #true_only_prefixed_by_of[all_parts[k]] = {all_parts[c] for c in v}
     #true_only_suffixed_by_of[all_parts[k]] = {all_parts[c] for c in v}
     #true_no_suffixed_by_of_roots[all_parts[k]] = {all_parts[c] for c in v}
     #true_no_suffixed_by_of_nonroots[all_parts[k]] = {all_parts[c] for c in v}
@@ -2908,12 +2908,12 @@ def load(path=None, name=None, bint profile=False, bint debug=False, force=False
         for j in range(size2):
             mapping.insert(data[k]); k += 1
             
-        true_no_prefixed_by_of[part_id] = mapping
+        true_only_prefixed_by_of[part_id] = mapping
         
-    assert size == <int>true_no_prefixed_by_of.size(), \
-        "true_no_prefixed_by_of size mismatch. Got %s, should be %s"%(true_no_prefixed_by_of.size(), size)
+    assert size == <int>true_only_prefixed_by_of.size(), \
+        "true_only_prefixed_by_of size mismatch. Got %s, should be %s"%(true_only_prefixed_by_of.size(), size)
     if profile:
-        print('true_no_prefixed_by_of: ' + str(true_no_prefixed_by_of.size()) )
+        print('true_only_prefixed_by_of: ' + str(true_only_prefixed_by_of.size()) )
         
         
     size = data[k]; k += 1
