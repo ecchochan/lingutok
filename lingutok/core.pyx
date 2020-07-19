@@ -670,14 +670,17 @@ import json
 
 
 def get_file(x):
-    return root+ '/resources/' + x
+    return root + x
+
+
+
 def set_root(x):
     global root
     if not x.endswith('/'):
         x = x + '/'
     root = x
 
-set_root(resource_filename(package_name, ''))
+set_root(resource_filename(package_name, '')+ '/resources/')
 
 cdef int SPECIAL_TOKEN_PAD  = 0
 cdef int SPECIAL_TOKEN_UNK  = 1
@@ -833,7 +836,9 @@ cdef class Encoded:
             (all_parts_list[(-e)//9-1]+' (%s)'%FORMS[(-e)%3]) if e < 0 else chr(e)
             for e in self.part_ids)
 
-    def __getitem__(self, i):
+    def __getitem__(self, int i):
+        if i < 0 or i >= self.part_ids.size():
+            raise IndexError("list index out of range")
         e = self.part_ids[i]
         return (all_parts_list[(-e)//9-1]+' (%s)'%FORMS[(-e)%3]) if e < 0 else chr(e)
         
@@ -2648,7 +2653,14 @@ def true_trie_values_to_np():
 import zlib
 cdef Trie trie_obj = Trie()
 
-def generate_trie(str path, str name, bint debug=False):
+def generate_trie(str path, str name):
+    import sys, subprocess
+    subprocess.call([sys.executable, 
+        "-c", 
+        "from lingutok import _generate_trie;_generate_trie(%r,%r)"%(path, name)])
+    
+
+def _generate_trie(str path, str name, bint debug=False):
     global stay_alive, trie_obj
     cdef int i, size, size2
 
@@ -2792,7 +2804,7 @@ def load(path=None, name=None, bint profile=False, bint debug=False, force=False
                 os.mkdir(path)
             subprocess.call([sys.executable, 
                 "-c", 
-                "from lingutok import generate_trie;generate_trie(%r,%r)"%(path, name)])
+                "from lingutok import _generate_trie;_generate_trie(%r,%r)"%(path, name)])
             
 
 

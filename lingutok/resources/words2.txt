@@ -224,7 +224,7 @@
 -ig
 -ile|+e
 -iless,-less|+y|.
--ility,-ity|+ile,+le|.
+#-ility,-ity|+ile,+le|.
 -ille
 -ily|+y|.
 -ime,ine
@@ -594,7 +594,8 @@ abide
 abject
 abjure
 ablaze
-able,-able
+able,-able,abile,-abile
+-abile|+e
 ablute
 abnegate
 abode
@@ -2064,6 +2065,7 @@ camp
 campaign
 campus
 can
+cane
 canad
 cancel
 cancer
@@ -4151,7 +4153,8 @@ idio-
 idiot
 idol
 if
-igne,ign
+igne,igni-,igneo-,ignite,ign
+ignoble,ignom
 ignore
 il-,il
 ileo-,ile,ile-
@@ -5597,8 +5600,11 @@ phil
 phil-,philo-
 phile
 philosophy
-phleb-,phleb,vein
+phleb-,phleb,vein,phlebo-,phlebotom
 phlogo-,phlog-,phlog
+phlegm
+phloem
+phlog
 phoen
 phon-
 phone
@@ -7293,11 +7299,11 @@ tissue
 tit
 titan
 title
-to
 to-,to
+today
 toast
 tobacco
-toco-
+toco-,toc,toc-
 tod
 todd
 toe
@@ -7466,7 +7472,7 @@ tweet
 twelve
 twice
 twin
-twist
+twist,anfractuos,anfractu
 twitch
 twitter
 two
