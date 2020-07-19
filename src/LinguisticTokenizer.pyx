@@ -2773,7 +2773,7 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
         if not exists:
             print('generating data at %s'%p)
             LinguisticTokenizer.generate_trie(path, 'default')
-            import sys
+            import sys, subprocess
             subprocess.call([sys.executable, 
                 "-c", 
                 "from LinguisticTokenizer import generate_trie;generate_trie(%r,'default')"%root])
