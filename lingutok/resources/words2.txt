@@ -4279,6 +4279,7 @@ interne,intern
 internet
 interrupt
 intervene
+interpret
 intim
 into
 intra-,intro-

@@ -2783,7 +2783,8 @@ def load(path=None, name=None, bint profile=False, bint debug=False, force=False
 
     if path_is_none and name_is_none:
         exists = os.path.exists(os.path.join(path, 'default.trie'))
-        if not exists or force:
+
+        if not exists or force or (exists and os.path.getmtime(os.path.join(path, 'default.trie')) < os.path.getmtime(get_file(''))):
             print('generating data at %s'%path)
             import sys, subprocess
             
