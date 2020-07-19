@@ -24,7 +24,7 @@ expand_allowed_reverse = {
 	'alley': set(['re','mis','mes','iance','ance','multi']),
 	'rally': set(['re','mis','mes','iance','ance','multi']),
 	'dally': set(['re','mis','mes','iance','ance','multi']),
-	'logic': set(['il','pseudo','non','counter','over','a']),
+	'logic': set(['il','mis','pseudo','non','counter','over','a']),
 }	
 
 _pairs_exceptions  = [
