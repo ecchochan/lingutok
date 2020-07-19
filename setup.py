@@ -7,8 +7,8 @@ import sys
 import subprocess
 
 if not os.path.exists('/usr/lib/liblibmarisa-trie.so'):
-    subprocess.call("./install_dep.sh", shell=True)
-subprocess.call("./update_cpp.sh", shell=True)
+    subprocess.call("sudo bash ./install_dep.sh", shell=True)
+subprocess.call("sudo bash ./update_cpp.sh", shell=True)
 
 
 MARISA_ROOT_DIR = "marisa-trie"
