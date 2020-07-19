@@ -2771,10 +2771,32 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
         print('Already loaded.')
         return
 
-    if path is None:
-        path = root + 'resources/'
-    if name is None:
+    print('Loading lingutok...')
+
+    path_is_none = path is None
+    name_is_none = name is None
+
+    if path_is_none:
+        path = os.path.expanduser('~/.cache/lingutok/')
+    if name_is_none:
         name = 'default'
+
+    if path_is_none and name_is_none:
+        exists = os.path.exists(os.path.join(path, 'default.trie'))
+        if not exists:
+            print('generating data at %s'%path)
+            import sys, subprocess
+            os.mkdir(path)
+            if not os.path.exists(path):
+                os.mkdir(path)
+            subprocess.call([sys.executable, 
+                "-c", 
+                "from lingutok import generate_trie;generate_trie(%r,%r)"%(path, name)])
+            
+
+
+
+
         
     cdef unordered_set[int] mapping
     cdef Parts* vector_parts
@@ -2847,7 +2869,8 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
         
     assert true_trie_values_size == <int>true_trie_values.size(), "true_trie_values size mismatch. Got %s, should be %s"%(true_trie_values.size(), true_trie_values_size)
         
-    print('true_trie_values:', true_trie_values.size() )
+    if profile:
+        print('true_trie_values: ' + str(true_trie_values.size()) )
     
     size = data[k]; k += 1
     for i in range(size):
@@ -2868,8 +2891,10 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
 
     assert size == <int>part_id_to_irregular_parts.size(), "part_id_to_irregular_parts size mismatch. Got %s, should be %s"%(part_id_to_irregular_parts.size(), size)
 
-    print('part_id_to_irregular_parts:', part_id_to_irregular_parts.size() )
-    # print(part_id_to_irregular_parts)
+        
+    if profile:
+        print('part_id_to_irregular_parts: ' + str( part_id_to_irregular_parts.size() ))
+        
 
 
 
@@ -2887,7 +2912,8 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
         
     assert size == <int>true_no_prefixed_by_of.size(), \
         "true_no_prefixed_by_of size mismatch. Got %s, should be %s"%(true_no_prefixed_by_of.size(), size)
-    print('true_no_prefixed_by_of:', true_no_prefixed_by_of.size() )
+    if profile:
+        print('true_no_prefixed_by_of: ' + str(true_no_prefixed_by_of.size()) )
         
         
     size = data[k]; k += 1
@@ -2902,7 +2928,8 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
     
     assert size == <int>true_only_suffixed_by_of.size(), \
         "true_only_suffixed_by_of size mismatch. Got %s, should be %s"%(true_only_suffixed_by_of.size(), size)
-    print('true_only_suffixed_by_of:', true_only_suffixed_by_of.size() )
+    if profile:
+        print('true_only_suffixed_by_of: ' + str( true_only_suffixed_by_of.size()) )
         
     size = data[k]; k += 1
     for i in range(size):
@@ -2916,7 +2943,8 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
     
     assert size == <int>true_no_suffixed_by_of_roots.size(), \
         "true_no_suffixed_by_of_roots size mismatch. Got %s, should be %s"%(true_no_suffixed_by_of_roots.size(), size)
-    print('true_no_suffixed_by_of_roots:', true_no_suffixed_by_of_roots.size() )
+    if profile:
+        print('true_no_suffixed_by_of_roots: ' + str(true_no_suffixed_by_of_roots.size()) )
         
         
     size = data[k]; k += 1
@@ -2931,7 +2959,9 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
     
     assert size == <int>true_no_suffixed_by_of_nonroots.size(), \
         "true_no_suffixed_by_of_nonroots size mismatch. Got %s, should be %s"%(true_no_suffixed_by_of_nonroots.size(), size)
-    print('true_no_suffixed_by_of_nonroots:', true_no_suffixed_by_of_nonroots.size() )
+
+    if profile:
+        print('true_no_suffixed_by_of_nonroots: ' + str(true_no_suffixed_by_of_nonroots.size()) )
         
         
     size = data[k]; k += 1
@@ -2946,7 +2976,8 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
     
     assert size == <int>true_no_suffixed_by_of.size(), \
         "true_no_suffixed_by_of size mismatch. Got %s, should be %s"%(true_no_suffixed_by_of.size(), size)
-    print('true_no_suffixed_by_of:', true_no_suffixed_by_of.size() )
+    if profile:
+        print('true_no_suffixed_by_of: ' + str( true_no_suffixed_by_of.size() ))
     
     
     
@@ -2958,7 +2989,8 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
     assert size == <int>true_prefixes_lengths.size(), \
         "true_prefixes_lengths size mismatch. Got %s, should be %s"%(true_prefixes_lengths.size(), size)
     
-    print('true_prefixes_lengths:', true_prefixes_lengths.size() )
+    if profile:
+        print('true_prefixes_lengths: ' + str(true_prefixes_lengths.size()) )
 
 
     size = data[k]; k += 1
@@ -2969,7 +3001,8 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
     assert size == <int>true_part_id_to_vocab_id.size(), \
         "true_part_id_to_vocab_id size mismatch. Got %s, should be %s"%(true_part_id_to_vocab_id.size(), size)
     
-    print('true_part_id_to_vocab_id:', true_part_id_to_vocab_id.size() )
+    if profile:
+        print('true_part_id_to_vocab_id:' + str( true_part_id_to_vocab_id.size() ))
 
     size = data[k]; k += 1
     for i in range(size):
@@ -2990,6 +3023,7 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
     openmp.omp_unset_lock(&lock)
         
 
+    print('Loaded lingutok.')
 
 
 
