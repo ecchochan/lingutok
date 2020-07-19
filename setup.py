@@ -4,6 +4,12 @@ import glob
 import itertools
 import os
 
+import subprocess
+
+if not os.path.exists('/usr/lib/liblibmarisa-trie.so'):
+    subprocess.call("./install_dep.sh", shell=True)
+subprocess.call("./update_cpp.sh", shell=True)
+
 
 MARISA_ROOT_DIR = "marisa-trie"
 MARISA_SOURCE_DIR = os.path.join(MARISA_ROOT_DIR, "lib")
@@ -50,9 +56,18 @@ setup(
         "include_dirs": ["utf8proc"]
     })],
     ext_modules=ext_modules,
+    include_package_data=True,
     package_data={'LinguisticTokenizer': ['resources/*']}
 )
 
 
+from pkg_resources import resource_filename
+resource_filename('LinguisticTokenizer', '/resources/')
+path = resource_filename('LinguisticTokenizer', '/resources/')
+
+import LinguisticTokenizer
+exists = os.path.exists(os.path.join(path, 'default.trie'))
+if not exists:
+    LinguisticTokenizer.generate_trie(path, 'default')
 
 
