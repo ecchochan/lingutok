@@ -3,13 +3,19 @@ test*
 
 MANIFEST
 src/*.html
-src/*.cpp
 docs/_build
+resources/*.trie
+resources/*.vals
+resources/*.vocabs
 
 *.py[cod]
 
 # C extensions
 *.so
+*.c
+*.cpp
+**/*.cpp
+penmp
 
 # Packages
 *.egg
