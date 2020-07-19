@@ -56,7 +56,6 @@ setup(
         "include_dirs": ["utf8proc"]
     })],
     ext_modules=ext_modules,
-    include_package_data=True,
     package_data={'LinguisticTokenizer': ['resources/*']}
 )
 
