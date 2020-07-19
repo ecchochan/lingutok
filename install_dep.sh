@@ -2,7 +2,6 @@
 
 apt install autoconf libtool -y
 
-cd LinguisticTokenizer
 git submodule update --init --recursive
 
 cd marisa-trie
