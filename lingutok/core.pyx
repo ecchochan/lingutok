@@ -2763,7 +2763,7 @@ cdef double get_time():
 
 cdef bint loaded = False
 
-def load(path=None, name=None, bint profile=False, bint debug=False):
+def load(path=None, name=None, bint profile=False, bint debug=False, force=False):
     global all_parts_list, loaded
     openmp.omp_set_lock(&lock)
     if loaded:
@@ -2783,7 +2783,7 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
 
     if path_is_none and name_is_none:
         exists = os.path.exists(os.path.join(path, 'default.trie'))
-        if not exists:
+        if not exists or force:
             print('generating data at %s'%path)
             import sys, subprocess
             os.mkdir(path)
