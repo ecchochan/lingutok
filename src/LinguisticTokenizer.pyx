@@ -2775,7 +2775,7 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
             LinguisticTokenizer.generate_trie(path, 'default')
             subprocess.call([sys.executable, 
                 "-c", 
-                "from LinguisticTokenizer import generate_trie;generate_trie(%r,'default')"%path])
+                "from LinguisticTokenizer import generate_trie;generate_trie(%r,'default')"%root])
             
 
 
