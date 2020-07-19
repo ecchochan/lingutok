@@ -665,7 +665,7 @@ from pkg_resources import resource_filename
 
 
 package_name = 'LinguisticTokenizer'
-import os.path
+import os
 import json
 
 root = resource_filename(package_name, '')
@@ -2767,10 +2767,27 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
         print('Already loaded.')
         return
 
+    if path is None and name is None:
+        p = os.path.join(path, 'default.trie')
+        exists = os.path.exists(p)
+        if not exists:
+            print('generating data at %s'%p)
+            LinguisticTokenizer.generate_trie(path, 'default')
+            subprocess.call([sys.executable, 
+                "-c", 
+                "from LinguisticTokenizer import generate_trie;generate_trie(%r,'default')"%path])
+            
+
+
+
     if path is None:
         path = root
     if name is None:
         name = 'default'
+
+
+
+
         
     cdef unordered_set[int] mapping
     cdef Parts* vector_parts

@@ -3,7 +3,7 @@ from setuptools import setup, find_packages, Extension
 import glob
 import itertools
 import os
-
+import sys
 import subprocess
 
 if not os.path.exists('/usr/lib/liblibmarisa-trie.so'):
@@ -59,15 +59,4 @@ setup(
     include_package_data=True,
     package_data={'LinguisticTokenizer': ['resources/*']}
 )
-
-
-from pkg_resources import resource_filename
-resource_filename('LinguisticTokenizer', '/resources/')
-path = resource_filename('LinguisticTokenizer', '/resources/')
-
-import LinguisticTokenizer
-exists = os.path.exists(os.path.join(path, 'default.trie'))
-if not exists:
-    LinguisticTokenizer.generate_trie(path, 'default')
-
 
