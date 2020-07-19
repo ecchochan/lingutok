@@ -664,16 +664,20 @@ ctypedef (int*, float, int,  int          ) Parts
 from pkg_resources import resource_filename
 
 
-package_name = 'LinguisticTokenizer'
+package_name = 'lingutok'
 import os
 import json
 
-root = resource_filename(package_name, '')
+
 def get_file(x):
     return root+ '/resources/' + x
 def set_root(x):
     global root
+    if not x.endswith('/'):
+        x = x + '/'
     root = x
+
+set_root(resource_filename(package_name, ''))
 
 cdef int SPECIAL_TOKEN_PAD  = 0
 cdef int SPECIAL_TOKEN_UNK  = 1
@@ -686,9 +690,9 @@ cdef unordered_map[int, int*] replacements
 cdef int* replacement_temp
 cdef int L, i
 
-def load_mapping():
+def load_mapping(fn = None):
     replacements.clear()
-    fn = get_file('zh_char2str_mapping.txt')
+    fn = fn or get_file('zh_char2str_mapping.txt')
     with open(fn) as f:
         for line in f:
             line = line[:len(line)-1]
@@ -2767,27 +2771,10 @@ def load(path=None, name=None, bint profile=False, bint debug=False):
         print('Already loaded.')
         return
 
-    if path is None and name is None:
-        p = os.path.join(path, 'default.trie')
-        exists = os.path.exists(p)
-        if not exists:
-            print('generating data at %s'%p)
-            import sys, subprocess
-            subprocess.call([sys.executable, 
-                "-c", 
-                "from LinguisticTokenizer import generate_trie;generate_trie(%r,'default')"%root])
-            
-
-
-
     if path is None:
-        path = root
+        path = root + 'resources/'
     if name is None:
         name = 'default'
-
-
-
-
         
     cdef unordered_set[int] mapping
     cdef Parts* vector_parts

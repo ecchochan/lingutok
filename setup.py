@@ -5,7 +5,6 @@ import itertools
 import os
 import sys
 import subprocess
-from glob import glob
 
 if not os.path.exists('/usr/lib/liblibmarisa-trie.so'):
     subprocess.call("sudo bash ./install_dep.sh", shell=True)
@@ -29,24 +28,27 @@ MARISA_FILES[:] = itertools.chain(
 
 
 ext_modules = [
-    Extension("lingutok", [
-        "src/agent.cpp",
-        "src/base.cpp",
-        "src/iostream.cpp",
-        "src/key.cpp",
-        "src/keyset.cpp",
-        "src/lingutok.cpp",
-        "src/query.cpp",
-        "src/std_iostream.cpp",
-        "src/trie.cpp"
-    ], 
-    include_dirs=[MARISA_INCLUDE_DIR, "utf8proc"],
-    extra_compile_args=['-fopenmp'],
-    extra_link_args=['-fopenmp'],),
+    Extension(
+        "lingutok.core", [
+            "lingutok/agent.cpp",
+            "lingutok/base.cpp",
+            "lingutok/iostream.cpp",
+            "lingutok/key.cpp",
+            "lingutok/keyset.cpp",
+            "lingutok/core.cpp",
+            "lingutok/query.cpp",
+            "lingutok/std_iostream.cpp",
+            "lingutok/trie.cpp"
+        ], 
+        include_dirs=[MARISA_INCLUDE_DIR, "utf8proc"],
+        extra_compile_args=['-fopenmp'],
+        extra_link_args=['-fopenmp'],
+    ),
 ]
 
 setup(
     name='lingutok',
+    packages = find_packages(),
     version='0.0.1',
     description='Linguistic Tokenizer',
     libraries=[("libmarisa-trie", {
@@ -57,6 +59,6 @@ setup(
         "include_dirs": ["utf8proc"]
     })],
     ext_modules=ext_modules,
-    data_files=[('lingutok', glob('sources/*')),}
+    package_data={'lingutok': ['resources/*']}
 )
 

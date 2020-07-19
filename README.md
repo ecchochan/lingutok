@@ -1,10 +1,10 @@
-**An LinguisticTokenizer for English**
+**An Linguistic Tokenizer for English**
 
 
 
 ```bash
-git clone https://github.com/ecchochan/LinguisticTokenizer.git
-cd LinguisticTokenizer
+git clone https://github.com/ecchochan/lingutok.git
+cd lingutok
 
 sudo bash ./install_dep.sh
 
