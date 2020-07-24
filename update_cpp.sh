@@ -1,2 +1,2 @@
 #!/bin/sh
-cython lingutok/*.pyx lingutok/*.pxd --cplus -a
+cython lingutok/*.pyx lingutok/*.pxd --cplus

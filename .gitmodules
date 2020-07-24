@@ -1,3 +1,6 @@
 [submodule "marisa-trie"]
 	path = marisa-trie
 	url = https://github.com/s-yata/marisa-trie
+[submodule "OpenCC"]
+	path = OpenCC
+	url = https://github.com/BYVoid/OpenCC.git

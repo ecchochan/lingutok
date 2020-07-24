@@ -15,7 +15,7 @@ cimport trie
 cimport iostream
 cimport base
 from utf8proc cimport utf8proc_NFKD_strip
-
+from opencc cimport opencc_open, opencc_convert_utf8, opencc_convert_utf8_free
 from lrucache cimport lru_cache
 
 
@@ -680,7 +680,19 @@ def set_root(x):
         x = x + '/'
     root = x
 
-set_root(resource_filename(package_name, '')+ '/resources/')
+pkg_path = resource_filename(package_name, '')
+set_root(pkg_path+ '/resources/')
+
+
+ctypedef void* opencc_t
+cdef bytes opencc_config_path = (root+"/opencc_config/s2t.json").encode()
+
+cdef opencc_t opencc = opencc_open(opencc_config_path)
+if <opencc_t>(-1) == opencc:
+    raise Exception("Failed to load OpenCC")
+    
+    
+
 
 cdef int SPECIAL_TOKEN_PAD  = 0
 cdef int SPECIAL_TOKEN_UNK  = 1
@@ -705,7 +717,7 @@ def load_mapping(fn = None):
             if len(splitted) != 2:
                 continue
             a, b = splitted
-            assert len(a) == 1
+            assert len(a) == 1, splitted
             L = len(b)
             replacement_temp = <int*> malloc(sizeof(int) * (L+1))
             replacement_temp[0] = L
@@ -865,7 +877,9 @@ cdef int iter_unicode(char* chars,
         bint save_offsets = offsets != NULL
         size_t cased_count = 0
         int unicode_cursor = 0
-        
+
+    chars = opencc_convert_utf8(opencc, chars, length)
+    
     bucket.reserve(length)
     if save_cased:
         bucket_case.reserve(length)
@@ -882,6 +896,7 @@ cdef int iter_unicode(char* chars,
             lb = chars[cursor]
 
             if (lb - 0xc2) > (0xf4-0xc2):
+                opencc_convert_utf8_free(chars)
                 return -1
 
             if lb < 0x80:
@@ -1029,6 +1044,7 @@ cdef int iter_unicode(char* chars,
             elif lb < 0xE0:
                 size = 2
                 if cursor + size > length:
+                    opencc_convert_utf8_free(chars)
                     return -1
                 
                 #code = (a & 0b00000111)*2**6  + (b & 0b00111111)
@@ -1038,6 +1054,7 @@ cdef int iter_unicode(char* chars,
             elif lb < 0xF0:
                 size = 3
                 if cursor + size > length:
+                    opencc_convert_utf8_free(chars)
                     return -1
                 
                 #code = (a & 0b00000111)*2**12  + (b & 0b00111111) * 2**6 + (c & 0b00111111 )
@@ -1046,12 +1063,14 @@ cdef int iter_unicode(char* chars,
             elif ( lb & 0xF8 ) == 0xF0:
                 size = 4
                 if cursor + size > length:
+                    opencc_convert_utf8_free(chars)
                     return -1
                 
                 #code = (a & 0b00000111)*2**18  + (b & 0b00111111) * 2**12 + (c & 0b00111111 ) * 2**6 + (d & 0b00111111 )
                 code = ((lb & 7)<<18) | ((chars[cursor+1] & 0x3f)<<12) | ((chars[cursor+2] & 0x3f)<<6) | (chars[cursor+3] & 0x3f)
                 
             else:
+                opencc_convert_utf8_free(chars)
                 return -2
                 
             
@@ -1139,21 +1158,25 @@ cdef int iter_unicode(char* chars,
         cursor += size
         unicode_cursor += 1
         last_lb = lb
-        
+
+    opencc_convert_utf8_free(chars)
     return 1
 
 def tokenize(unicode text, bint keep_nl=True):
     cdef:
         Encoded encoded = Encoded()
         bytes text_b = text.encode('utf-8')
-        int code
+        int code, length = len(text_b)
+
     encoded.text = text
+
     code = iter_unicode(text_b, 
-                        len(text_b), 
+                        length, 
                         &encoded.part_ids,
                         &encoded.casing, 
                         &encoded.offsets,
                         keep_nl)
+
     if code == -1:
         raise Exception ("unexpected end of data")
     elif code == -2:
@@ -3313,7 +3336,7 @@ cdef int _tokenize_word_to_parts(char* chars, int length, vector[Parts]* results
 
 cdef int MAX_SPLIT_DIFF = 1
 cdef int MAX_SPLIT_START = 8
-
+from time import sleep
 cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, int max_call_depth, float min_score_ratio, bint debug) nogil:
     cdef:
         int i = 0, j = 0
@@ -3330,6 +3353,7 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
         float score
         vector[Parts] results = vector[Parts]()
         int count = 0
+        
 
     results.reserve(1024)
 
@@ -3339,18 +3363,17 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
     contents[0] = 0
     parts = (contents, 0, 0, 0)
 
+
     while cont:
         for i in range(length):
             min_num_splitted[i] = 100
         max_score = -100
         results.clear()
+            
         tokenize_inner(chars, cursor, length, parts, &cache, max_call_depth, &max_score, min_num_splitted, min_score_ratio, call_depth, &count, &results, debug)
             
+            
         size = results.size()
-        if debug:
-            with gil:
-                print('size:  '+str(size))
-                print('count: '+str(count))
 
         if size == 0:
             for j in range(contents[0]):
@@ -3365,6 +3388,7 @@ cdef int _tokenize_word(char* chars, int length, vector[int]* result_contents, i
         if size == 0:   
             while cursor < length:
                 result_contents.push_back(get_part(true_all_alphabets[chars[cursor]], ROOT, MERGE_MODE_BOTH))
+                cursor += 1
             break
 
 

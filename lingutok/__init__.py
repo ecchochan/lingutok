@@ -3,6 +3,7 @@ from lingutok.core import (
  generate_trie,
  _generate_trie,
  tokenize,
+ tokenize_word,
  tokenize_batch,
  set_root,
  py_iter_unicode,

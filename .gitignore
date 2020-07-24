@@ -4,9 +4,10 @@ test*
 MANIFEST
 src/*.html
 docs/_build
-resources/*.trie
-resources/*.vals
-resources/*.vocabs
+lingutok/resources/*.trie
+lingutok/resources/*.vals
+lingutok/resources/*.vocabs
+lingutok/resources/opencc_config/*
 
 *.py[cod]
 
