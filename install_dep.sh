@@ -1,6 +1,5 @@
 #!/bin/bash
-apt update
-apt install autoconf libtool opencc cmake doxygen zlib -y
+apt install autoconf libtool opencc cmake doxygen zlib1g-dev -y
 pip install cython
 git submodule update --init --recursive
 
@@ -39,7 +38,7 @@ make
 
 cd ..
 
-
+mkdir lingutok/resources/opencc_config/
 cp -f OpenCC/build/rel/data/*.ocd2 lingutok/resources/opencc_config/
 cp -f OpenCC/build/rel/data/*.txt lingutok/resources/opencc_config/
 cp -f OpenCC/data/config/* lingutok/resources/opencc_config/ 
