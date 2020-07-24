@@ -1,5 +1,5 @@
 #!/bin/bash
-
+apt update
 apt install autoconf libtool opencc cmake doxygen zlib -y
 pip install cython
 git submodule update --init --recursive
@@ -27,11 +27,9 @@ mkdir build
 cd build
 cmake ..
 # make install
-cp libutf8proc.a /usr/lib/liblibutf8proc.a
+# cp libutf8proc.a /usr/lib/liblibutf8proc.a
 
-cd ..
-
-
+cd ../..
 
 cd OpenCC
 make
