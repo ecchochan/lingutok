@@ -5,6 +5,7 @@ import itertools
 import os
 import sys
 import subprocess
+import numpy
 
 if not os.path.exists('/usr/lib/liblibmarisa-trie.so'):
     subprocess.call("sudo bash ./install_dep.sh", shell=True)
@@ -39,7 +40,7 @@ ext_modules = [
             "lingutok/std_iostream.cpp",
             "lingutok/trie.cpp"
         ], 
-        include_dirs=[MARISA_INCLUDE_DIR, "utf8proc","OpenCC/src"],
+        include_dirs=[MARISA_INCLUDE_DIR, "utf8proc","OpenCC/src",numpy.get_include()]+,
         extra_compile_args=['-fopenmp'],
         extra_link_args=['-fopenmp'],
     ),
@@ -94,7 +95,7 @@ setup(
         ]
     })],
     ext_modules=ext_modules,
-    setup_requires=['Cython'],
+    setup_requires=['Cython','numpy'],
     package_data={'lingutok': ['resources/*', 'resources/opencc_config/*']}
 )
 
