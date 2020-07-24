@@ -94,6 +94,7 @@ setup(
         ]
     })],
     ext_modules=ext_modules,
+    setup_requires=['Cython']
     package_data={'lingutok': ['resources/*', 'resources/opencc_config/*']}
 )
 
