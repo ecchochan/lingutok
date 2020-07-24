@@ -18,6 +18,7 @@ make
 # ln -s /usr/lib/libmarisa.so.0 /usr/lib/liblibmarisa.so.0
 # export LD_LIBRARY_PATH=/usr/lib:$LD_LIBRARY_PATH
 
+cd ..
 
 
 

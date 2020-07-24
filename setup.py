@@ -41,7 +41,7 @@ ext_modules = [
             "lingutok/trie.cpp"
         ], 
         include_dirs=[MARISA_INCLUDE_DIR, "utf8proc","OpenCC/src",numpy.get_include()],
-        extra_compile_args=['-fopenmp', 'fpermissive'],
+        extra_compile_args=['-fopenmp', '-fpermissive'],
         extra_link_args=['-fopenmp'],
     ),
 ]
