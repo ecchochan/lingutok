@@ -1186,7 +1186,7 @@ def tokenize(unicode text, bint keep_nl=True):
 
 
 cdef int _tokenize_batch(int size, 
-                         const char** texts_b,
+                         char** texts_b,
                          size_t* lengths,
                          vector[int]** part_ids_ptr, 
                          vector[bool]** casing_ptr, 
@@ -1235,7 +1235,7 @@ def tokenize_batch(list texts, bint keep_nl=True):
         vector[int]** part_ids_ptr = <vector[int]**>malloc(sizeof(vector_int_star) * size)
         vector[bool]** casing_ptr = <vector[bool]**>malloc(sizeof(vector_bool_star) * size)
         vector[int]** offsets_ptr = <vector[int]**>malloc(sizeof(vector_int_star) * size)
-        const char** texts_b = <const char**>malloc(sizeof(const char*) * size)
+        char** texts_b = <char**>malloc(sizeof(char*) * size)
         size_t* lengths = <size_t*>malloc(sizeof(size_t*) * size)
 
     for i in range(size):
@@ -1536,7 +1536,7 @@ cdef vector[AB] morphed_roots_merge_suffixes
 cdef vector[AB] get_morphed_suffixes_merge_suffixes(int min_left = 1):
     cdef int len_s, len_p, len_new_morphed, len_A, len_B
     cdef char* temp_char_star
-    cdef const char* orig_char_star
+    cdef char* orig_char_star
     cdef Py_ssize_t converted_size
     cdef float score
     morphed_suffixes_merge_suffixes.reserve(65536)
