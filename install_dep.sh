@@ -1,6 +1,5 @@
 #!/bin/bash
 apt install autoconf libtool opencc cmake doxygen zlib1g-dev -y
-pip install cython
 git submodule update --init --recursive
 
 cd marisa-trie
