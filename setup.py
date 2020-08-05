@@ -6,9 +6,9 @@ import os
 import sys
 import subprocess
 import numpy
-subprocess.call(sys.executable + ' -m pip install cython', shell=True)
 
-subprocess.call("sudo bash ./install_dep.sh", shell=True)
+#subprocess.call(sys.executable + ' -m pip install cython', shell=True)
+#subprocess.call("sudo bash ./install_dep.sh", shell=True)
 subprocess.call("sudo bash ./update_cpp.sh", shell=True)
 
 MARISA_ROOT_DIR = "marisa-trie"
