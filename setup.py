@@ -35,7 +35,7 @@ ext_modules = [
             "lingutok/iostream.cpp",
             "lingutok/key.cpp",
             "lingutok/keyset.cpp",
-            "lingutok/core.cpp",
+            "lingutok/lingutok_core.cpp",
             "lingutok/query.cpp",
             "lingutok/std_iostream.cpp",
             "lingutok/trie.cpp"
