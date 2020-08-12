@@ -20,7 +20,8 @@ def pre_install():
 class CustomInstallCommand(install):
     def run(self):
         pre_install()
-        install.do_egg_install(self)
+        #install.do_egg_install(self)
+        install.run(self)
 
 
 class CustomDevelopCommand(develop):
