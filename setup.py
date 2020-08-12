@@ -7,19 +7,32 @@ import sys
 import subprocess
 import numpy
 from setuptools.command.install import install
+from setuptools.command.develop import develop
+from setuptools.command.egg_info import egg_info
 
 
 #subprocess.call(sys.executable + ' -m pip install cython', shell=True)
 #subprocess.call("sudo bash ./install_dep.sh", shell=True)
-subprocess.call(sys.executable + " -m python lingutok/*.pyx lingutok/*.pxd --cplus", shell=True)
+def pre_install():
+    subprocess.call("sudo bash ./install_dep.sh", shell=True)
+    subprocess.call(sys.executable + " -m cython lingutok/*.pyx lingutok/*.pxd --cplus", shell=True)
 
-class MyInstall(install):
+class CustomInstallCommand(install):
     def run(self):
-        subprocess.call("sudo bash ./install_dep.sh", shell=True)
-        subprocess.call(sys.executable + " -m cython lingutok/*.pyx lingutok/*.pxd --cplus", shell=True)
-        # install.run(self)
+        pre_install()
         install.do_egg_install(self)
 
+
+class CustomDevelopCommand(develop):
+    def run(self):
+        pre_install()
+        develop.run(self)
+
+
+class CustomEggInfoCommand(egg_info):
+    def run(self):
+        pre_install()
+        egg_info.run(self)
 
 
 
@@ -112,6 +125,10 @@ setup(
     setup_requires=['Cython','numpy'],
     install_requires=["Cython", "numpy"],
     package_data={'lingutok': ['resources/*', 'resources/opencc_config/*']},
-    cmdclass={'install': MyInstall},
+    cmdclass={
+        'install': CustomInstallCommand,
+        'develop': CustomDevelopCommand,
+        'egg_info': CustomEggInfoCommand,
+    },
 )
 
