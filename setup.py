@@ -18,7 +18,7 @@ class MyInstall(install):
         subprocess.call("sudo bash ./install_dep.sh", shell=True)
         subprocess.call(sys.executable + " -m cython lingutok/*.pyx lingutok/*.pxd --cplus", shell=True)
         # install.run(self)
-        install.do_egg_install()
+        install.do_egg_install(self)
 
 
 
