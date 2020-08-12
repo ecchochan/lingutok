@@ -6,11 +6,25 @@ import os
 import sys
 import subprocess
 import numpy
+from setuptools.command.install import install
+
 
 #subprocess.call(sys.executable + ' -m pip install cython', shell=True)
 #subprocess.call("sudo bash ./install_dep.sh", shell=True)
-subprocess.call("sudo bash ./update_cpp.sh", shell=True)
+subprocess.call(sys.executable + " -m python lingutok/*.pyx lingutok/*.pxd --cplus", shell=True)
 
+class MyInstall(install):
+    def run(self):
+        subprocess.call("sudo bash ./install_dep.sh", shell=True)
+        subprocess.call(sys.executable + " -m python lingutok/*.pyx lingutok/*.pxd --cplus", shell=True)
+        # install.run(self)
+        install.do_egg_install()
+
+
+
+
+
+        
 MARISA_ROOT_DIR = "marisa-trie"
 MARISA_SOURCE_DIR = os.path.join(MARISA_ROOT_DIR, "lib")
 MARISA_INCLUDE_DIR = os.path.join(MARISA_ROOT_DIR, "include")
@@ -96,6 +110,8 @@ setup(
     })],
     ext_modules=ext_modules,
     setup_requires=['Cython','numpy'],
-    package_data={'lingutok': ['resources/*', 'resources/opencc_config/*']}
+    install_requires=["Cython", "numpy"],
+    package_data={'lingutok': ['resources/*', 'resources/opencc_config/*']},
+    cmdclass={'install': MyInstall},
 )
 
