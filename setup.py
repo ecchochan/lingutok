@@ -29,7 +29,7 @@ MARISA_FILES[:] = itertools.chain(
 
 ext_modules = [
     Extension(
-        "lingutok.core", [
+        "lingutok_core", [
             "lingutok/agent.cpp",
             "lingutok/base.cpp",
             "lingutok/iostream.cpp",

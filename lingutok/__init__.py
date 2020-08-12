@@ -1,4 +1,4 @@
-from .core import (
+from lingutok_core import (
  load,
  generate_trie,
  _generate_trie,
