@@ -144,7 +144,7 @@
 -esce|+e
 -ese
 -esque
--ess,-ress
+-ress,-ess|+e
 -est
 -est|+e
 -et
@@ -2111,6 +2111,7 @@ cardi-,cardio-,cardi,heart,cardia-,-cardia
 cardin
 care
 career
+caress,fondle
 caricat
 carn
 carol
@@ -2621,7 +2622,7 @@ crash
 crave
 craw
 crawl
-craze
+craze,dement
 crazy
 cre-
 creak
@@ -2678,7 +2679,7 @@ crown
 cruci
 crucial
 crucy
-crud
+crud,dirt
 crude
 cruel
 cruise
@@ -3448,7 +3449,7 @@ fict
 ficus
 fid
 field
-fierce
+fierce,feroc
 fifa
 fig
 fight
@@ -3545,6 +3546,8 @@ follicul-,follicul,follicle,folli
 follow
 fon
 font
+fond
+fondle
 food
 foot
 for
@@ -3850,6 +3853,7 @@ ground
 group
 grow
 growth
+grope,fumble
 grudge
 gu
 guan
@@ -4480,6 +4484,7 @@ kleen
 klux
 kn-
 knack
+knead
 knee
 kneel
 knew
@@ -4792,7 +4797,9 @@ mag
 magazine,magaz
 magic,gramary,gramarye
 magma,magmat
-magn-,magn
+magn-,magni-,magn,magnanim,magno-
+magnet,magna-,magneto-
+magnol
 magnes
 mai
 maid,mait
@@ -4836,6 +4843,7 @@ manu-
 manufact,manuf,manufac
 many
 mao
+maul
 map
 mar
 marble,marmore
@@ -4888,7 +4896,10 @@ measure
 meat
 mechan,mech,mech-
 meddle
+media,medi,medi-
 medic,med
+mediate
+mediast
 meek
 meet
 meg-,mega-,megal-,megalo-
@@ -4902,6 +4913,7 @@ melos
 melt
 mem
 member
+membrane
 meme
 memento,memor,souvenir,memr
 memo
@@ -4970,6 +4982,7 @@ milli-,millen,milli,mille-,million,millesim
 milliard,billion
 milline
 milliner
+mimic,mimick
 min
 minac
 mind
@@ -5432,6 +5445,7 @@ pale
 paleo-,anci
 palimony
 pallad
+pallet
 palm
 palpebr-
 pan
@@ -6276,6 +6290,7 @@ rubber
 rubbish
 rubid
 rubr-,rubro-
+ruby
 rud
 rug
 rugby
@@ -6381,9 +6396,7 @@ scale
 scalp
 scam
 scan
-scand
 scandal
-scant
 scape
 scar
 scarce,scant
@@ -7473,7 +7486,7 @@ twelve
 twice
 twin
 twist,anfractuos,anfractu
-twitch
+twitch,vellic
 twitter
 two
 tx
@@ -7585,6 +7598,9 @@ veget
 vehicle
 veil
 vel
+velum,velam
+velve,velutin
+veloce
 ven-,ven-
 vena,vein
 venal
@@ -7660,6 +7676,8 @@ vina
 vince
 vinculum
 vinegar
+viol
+viola
 violate
 vir
 virgin
@@ -7691,6 +7709,8 @@ volume
 volunt
 volute
 volve
+volite,volition
+volley
 vomit
 vorac
 vote

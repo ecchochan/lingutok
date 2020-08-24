@@ -19,6 +19,7 @@ eason
 *mic
 *mac
 *big
+*ruby
 michael
 carrie
 charlie
