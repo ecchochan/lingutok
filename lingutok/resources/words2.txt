@@ -861,7 +861,6 @@ alimony
 alit
 alkali
 all
-all-
 allah
 allay
 allege
@@ -963,6 +962,7 @@ amygd,amygdule,amygdale,amygdulo-,amygdalo-
 amyl-,amyl,amylo-
 an-
 ana-
+anesthes,anaesthes
 anachron
 anaconda
 anal
@@ -1072,7 +1072,7 @@ aplomb
 apo-
 apocalypse,apocalyp
 apogee
-apolog
+apolog,apology,apologet
 apoplexy
 apost
 apostroph
@@ -4613,7 +4613,7 @@ leg
 legacy
 legal,iegal
 legend
-legisl,legis
+legisl,legislate,legis
 legit,legitim
 leh
 lei
@@ -6900,6 +6900,7 @@ state
 static
 station
 status
+statute
 stawtle
 stay
 stead
@@ -7389,6 +7390,7 @@ trample
 trance,tran
 tranquil
 trans-,trans
+transact
 trans-,transfer
 transmit,transmiss
 trap
